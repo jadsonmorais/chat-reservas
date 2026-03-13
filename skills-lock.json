@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "skills": {
+    "antigravity-workflows": {
+      "source": "sickn33/antigravity-awesome-skills",
+      "sourceType": "github",
+      "computedHash": "4bb3bc25c4e7e8f0dcc7ed466259669a9b90ef86b4f9dfcd766d3928fe3ab4e9"
+    },
+    "postgresql-skill": {
+      "source": "ingpoc/skills",
+      "sourceType": "github",
+      "computedHash": "6212b73cb6ca370ca31229d0530cd9bdeeeb4944af606a7d7e8d0c2ae70faf74"
+    },
+    "serpapi": {
+      "source": "vm0-ai/vm0-skills",
+      "sourceType": "github",
+      "computedHash": "28d3569ff1bae1a4d94662b4869a797a57424ecee47b6762d26199c80b30c42d"
+    }
+  }
+}
