@@ -49,6 +49,8 @@ export default async function searchFlights({
   const otherFlights = data.other_flights ?? [];
   const allFlights = [...bestFlights, ...otherFlights];
 
+  console.log(`[searchFlights] Results found: ${allFlights.length} (Best: ${bestFlights.length}, Other: ${otherFlights.length})`);
+
   const bestFlight = bestFlights[0] ?? null;
   const cheapestFlight = findCheapest(allFlights);
 

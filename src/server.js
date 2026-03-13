@@ -2,10 +2,18 @@ import express from 'express';
 import { handleMessage } from './agent/agent.js';
 import { sendMessage } from './services/evolutionApi.js';
 
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
 const app = express();
 
 // ── Middleware ───────────────────────────────────────────────
 app.use(express.json({ limit: '1mb' }));
+// Serve the front-end chat interface
+app.use(express.static(join(__dirname, '../public')));
 
 // ── Health check ────────────────────────────────────────────
 app.get('/health', (_req, res) => {

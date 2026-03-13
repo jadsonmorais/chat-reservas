@@ -14,6 +14,7 @@ WORKDIR /app
 COPY --from=builder /app/node_modules ./node_modules
 COPY package.json ./
 COPY src/ ./src/
+COPY public/ ./public/
 
 # Non-root user for security
 RUN addgroup -g 1001 appgroup && \

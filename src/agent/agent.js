@@ -209,13 +209,13 @@ function extractFlightParams(text) {
 
   // Filter common words that happen to be 3 letters
   const stopWords = new Set([
-    'THE', 'AND', 'FOR', 'ARE', 'BUT', 'NOT', 'YOU', 'ALL',
-    'CAN', 'HAD', 'HER', 'WAS', 'ONE', 'OUR', 'OUT', 'DAY',
-    'GET', 'HAS', 'HIM', 'HIS', 'HOW', 'ITS', 'MAY', 'NEW',
-    'NOW', 'OLD', 'SEE', 'WAY', 'WHO', 'DID', 'LET', 'SAY',
+    'THE', 'AND', 'ARE', 'BUT', 'NOT', 'YOU',
+    'CAN', 'HAD', 'HER', 'WAS', 'ONE', 'OUR', 'OUT',
+    'HAS', 'HIM', 'HIS', 'HOW', 'ITS',
+    'NOW', 'OLD', 'SEE', 'WAY', 'WHO', 'DID', 'LET',
     'SHE', 'TOO', 'USE', 'DAD', 'MOM', 'SOU', 'COM', 'QUE',
-    'POR', 'UMA', 'DOS', 'DAS', 'NOS', 'VOO', 'IDA', 'DIA',
-    'MEU', 'SEM', 'MAS', 'FAZ', 'TEM', 'VOU', 'SER', 'TAM',
+    'POR', 'UMA', 'DOS', 'DAS', 'NOS', 'IDA', 'DIA', 'VOO',
+    'MEU', 'SEM', 'MAS', 'FAZ', 'TEM', 'VOU', 'SER', 'TAM', 'GOL', 'AZU',
   ]);
 
   const validIata = iataCodes.filter((c) => !stopWords.has(c));
@@ -223,9 +223,12 @@ function extractFlightParams(text) {
   // ── Date extraction ──
   const dates = extractDates(text);
 
+  // Deduplicate while preserving order
+  const uniqueIata = [...new Set(validIata)];
+
   return {
-    origin: validIata[0] ?? null,
-    destination: validIata[1] ?? null,
+    origin: uniqueIata[0] ?? null,
+    destination: uniqueIata[1] ?? null,
     departureDate: dates[0] ?? null,
     returnDate: dates[1] ?? null,
   };
