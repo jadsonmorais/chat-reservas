@@ -14,8 +14,9 @@ import {
 const FLIGHT_KEYWORDS = [
   'voo', 'voos', 'voar', 'flight', 'flights',
   'passagem', 'passagens', 'aérea', 'aéreo', 'aereo',
-  'ida e volta', 'embarque', 'destino',
-  'gru', 'gig', 'cgh', 'sdu', 'bsb', 'mia', 'jfk', 'mco', 'cdg', 'lhr',
+  'ida e volta', 'embarque', 'destino', 'oportunidade', 'hubs',
+  'gru', 'gig', 'cgh', 'sdu', 'bsb', 'mia', 'jfk', 'mco', 'cdg', 'lhr', 'for',
+  'fortaleza', 'ceara', 'ceará',
 ];
 
 /** Flag set to true when DB is confirmed unreachable. */
@@ -101,91 +102,116 @@ export async function handleMessage({ conversationId, customerPhone, messageCont
 // ── Flight search pipeline ──────────────────────────────────
 
 async function handleFlightSearch({ conversationId, customerPhone, messageContent, fullContext }) {
-  // ── Parse flight params from context ──
-  const searchParams = extractFlightParams(fullContext);
+  // ── 1. Strict Parameter Priority ──
+  // We extract from current message ONLY for fields that should be "fresh"
+  const currentParams = extractFlightParams(messageContent);
+  const contextParams = extractFlightParams(fullContext);
 
-  if (!searchParams.origin || !searchParams.destination || !searchParams.departureDate) {
+  // Intent: If the user didn't mention a return date in the latest message, 
+  // we assume a one-way search OR they are changing the scope. 
+  // We only fallback to context for things NOT usually specified in every single msg (like phone).
+  const searchParams = {
+    origin: currentParams.origin || contextParams.origin,
+    destination: currentParams.destination || contextParams.destination,
+    departureDate: currentParams.departureDate || (isDateInMsg(messageContent) ? null : contextParams.departureDate),
+    returnDate: currentParams.returnDate || null, // Never fallback return date unless explicitly in msg
+  };
+
+  // ── 2. Hub / Multi-origin detection ──
+  const HUB_KEYWORDS = ['HUBS', 'PRINCIPAIS', 'TODOS', 'CAPITAIS', 'BRASIL'];
+  const isMultiHub = HUB_KEYWORDS.some(kw => messageContent.toUpperCase().includes(kw));
+  const hubs = ['GRU', 'BSB', 'GIG', 'CNF', 'VCP', 'REC', 'SSA'];
+
+  // ── 3. Hub logic: If multi-hub, the detected code is likely the destination ──
+  if (isMultiHub && currentParams.origin && !currentParams.destination) {
+    searchParams.destination = currentParams.origin; // Swap
+    searchParams.origin = null;
+  }
+
+  // Parameter Validation fallback
+  if (!searchParams.destination && contextParams.destination) searchParams.destination = contextParams.destination;
+
+  // ── 4. Execution ──
+  const origins = isMultiHub ? hubs : [searchParams.origin].filter(Boolean);
+
+  if (origins.length === 0 || !searchParams.destination || !searchParams.departureDate) {
     const missingFields = [];
-    if (!searchParams.origin) missingFields.push('origem (código IATA, ex: GRU)');
-    if (!searchParams.destination) missingFields.push('destino (código IATA, ex: MIA)');
-    if (!searchParams.departureDate) missingFields.push('data de ida (ex: 15/04/2026)');
+    if (origins.length === 0) missingFields.push('origem (ex: GRU ou "principais hubs")');
+    if (!searchParams.destination) missingFields.push('destino (ex: FOR)');
+    if (!searchParams.departureDate) missingFields.push('data de ida (ex: 15/05/2026)');
 
-    const text =
-      '✈️ Para buscar seu voo, preciso das seguintes informações:\n\n' +
-      missingFields.map((f) => `  • ${f}`).join('\n');
+    const text = '✈️ Para realizar a análise técnica, preciso dessas informações:\n\n' +
+                 missingFields.map(f => `  • ${f}`).join('\n');
 
-    return formatResponse({
-      text,
-      opportunityLevel: 'unknown',
-      suggestions: [],
-      priceAnalysis: {},
-      searchParams,
-    });
+    return formatResponse({ text, opportunityLevel: 'unknown', suggestions: [], priceAnalysis: {}, searchParams });
   }
 
-  // ── Execute flight search ──
-  console.log(`[Agent] Searching flights: ${searchParams.origin} → ${searchParams.destination} on ${searchParams.departureDate}`);
+  console.log(`[Agent] Executing ${origins.length} searches for ${searchParams.destination} on ${searchParams.departureDate}`);
 
-  const flightResults = await searchFlights(searchParams);
-
-  // ── Load historical prices for comparison ──
-  let historicalPrices = [];
-  if (!dbUnavailable) {
+  // ── 5. Concurrent Search ──
+  const results = await Promise.all(origins.map(async (origin) => {
     try {
-      historicalPrices = await getRecentSearches({
-        origin: searchParams.origin,
-        destination: searchParams.destination,
-      });
-    } catch {
-      // Non-fatal — historical data is a nice-to-have
-    }
-  }
+      const flightResults = await searchFlights({ ...searchParams, origin });
+      
+      let historicalPrices = [];
+      if (!dbUnavailable) {
+        historicalPrices = await getRecentSearches({ origin, destination: searchParams.destination }).catch(() => []);
+      }
 
-  // ── Analyse sales opportunity ──
-  const opportunity = analyzeSalesOpportunity({
-    bestFlight: flightResults.bestFlight,
-    cheapestFlight: flightResults.cheapestFlight,
-    destination: searchParams.destination,
-    historicalPrices,
-  });
-
-  // ── Build human-readable message ──
-  const humanText = buildHumanMessage({
-    bestFlight: flightResults.bestFlight,
-    cheapestFlight: flightResults.cheapestFlight,
-    origin: searchParams.origin,
-    destination: searchParams.destination,
-    departureDate: searchParams.departureDate,
-    returnDate: searchParams.returnDate,
-    opportunityLevel: opportunity.opportunityLevel,
-    suggestions: opportunity.suggestions,
-  });
-
-  // ── Persist everything ──
-  if (!dbUnavailable) {
-    try {
-      await persistTransaction({
-        conversationId,
-        customerPhone,
-        searchParams,
+      const opportunity = analyzeSalesOpportunity({
         bestFlight: flightResults.bestFlight,
         cheapestFlight: flightResults.cheapestFlight,
-        rawResponse: { allFlights: flightResults.allFlights },
-        salesOpportunity: opportunity,
-        assistantMessage: humanText,
+        destination: searchParams.destination,
+        historicalPrices,
       });
+
+      return { origin, flightResults, opportunity };
     } catch (err) {
-      console.error('[Agent] Persistence failed (non-fatal):', err.message);
+      console.error(`[Agent] Search failed for ${origin}:`, err.message);
+      return { origin, error: err.message };
+    }
+  }));
+
+  // ── 6. Aggregate Response ──
+  const humanText = buildHumanMessage({
+    multiResults: results,
+    destination: searchParams.destination,
+    departureDate: searchParams.departureDate,
+    returnDate: searchParams.returnDate
+  });
+
+  // ── 7. Global Persistence ──
+  if (!dbUnavailable) {
+    try {
+      const bestGlobal = results.find(r => r.opportunity?.opportunityLevel === 'high') || results[0];
+      if (bestGlobal && !bestGlobal.error) {
+        await persistTransaction({
+          conversationId,
+          customerPhone,
+          searchParams: { ...searchParams, origin: bestGlobal.origin },
+          bestFlight: bestGlobal.flightResults.bestFlight,
+          cheapestFlight: bestGlobal.flightResults.cheapestFlight,
+          rawResponse: { resultsCount: results.length },
+          salesOpportunity: bestGlobal.opportunity,
+          assistantMessage: humanText,
+        });
+      }
+    } catch (err) {
+      console.error('[Agent] Persistence failed:', err.message);
     }
   }
 
   return formatResponse({
     text: humanText,
-    opportunityLevel: opportunity.opportunityLevel,
-    suggestions: opportunity.suggestions,
-    priceAnalysis: opportunity.priceAnalysis,
+    opportunityLevel: results.some(r => r.opportunity?.opportunityLevel === 'high') ? 'high' : 'medium',
+    suggestions: results.flatMap(r => r.opportunity?.suggestions || []).slice(0, 5),
+    priceAnalysis: { multiHub: true, totalSearches: results.length },
     searchParams,
   });
+}
+
+function isDateInMsg(text) {
+  return /\b\d{4}-\d{2}-\d{2}\b/.test(text) || /\b\d{2}\/\d{2}\/\d{4}\b/.test(text);
 }
 
 // ── Intent detection ────────────────────────────────────────
@@ -204,6 +230,50 @@ function detectFlightIntent(text) {
  *   - Brazilian dates (15/04/2026)
  */
 function extractFlightParams(text) {
+  const upperText = text.toUpperCase();
+  let codes = extractIataCodes(text);
+
+  // ── Precise "PARA" (TO) Detection ──
+  // If we find "PARA [CITY]", that city MUST be the destination
+  const paraMatch = upperText.match(/PARA\s+([A-ZÀ-Úa-zà-ú]+)/);
+  let paraIata = null;
+  if (paraMatch) {
+    const city = paraMatch[1];
+    if (city === 'FORTALEZA') paraIata = 'FOR';
+    if (city === 'BRASILIA' || city === 'BRASÍLIA') paraIata = 'BSB';
+    if (city === 'RIO' || city === 'GIG') paraIata = 'GIG';
+    if (city === 'SAO PAULO' || city === 'SÃO PAULO' || city === 'GRU') paraIata = 'GRU';
+  }
+
+  // ── City to IATA Mapping (General) ──
+  if (upperText.includes('FORTALEZA') && !codes.includes('FOR')) codes.push('FOR');
+  if ((upperText.includes('SÃO PAULO') || upperText.includes('SAO PAULO')) && !codes.includes('GRU')) codes.push('GRU');
+  if (upperText.includes('RIO DE JANEIRO') && !codes.includes('GIG')) codes.push('GIG');
+
+  // If we found a "PARA" destination, ensure it's in the second slot or correctly assigned
+  if (paraIata) {
+    codes = codes.filter(c => c !== paraIata); // Remove if already there
+    codes.splice(1, 0, paraIata); // Insert as second element (destination)
+  }
+
+  // ── Date extraction ──
+  const dates = extractDates(text);
+
+  // Deduplicate while preserving order
+  const uniqueIata = [...new Set(codes)];
+
+  return {
+    origin: uniqueIata[0] ?? null,
+    destination: uniqueIata[1] ?? null,
+    departureDate: dates[0] ?? null,
+    returnDate: dates[1] ?? null,
+  };
+}
+
+/**
+ * Internal helper to get all valid IATA codes from a string.
+ */
+function extractIataCodes(text) {
   // Match 3-letter uppercase IATA codes
   const iataCodes = text.toUpperCase().match(/\b[A-Z]{3}\b/g) ?? [];
 
@@ -214,24 +284,11 @@ function extractFlightParams(text) {
     'HAS', 'HIM', 'HIS', 'HOW', 'ITS',
     'NOW', 'OLD', 'SEE', 'WAY', 'WHO', 'DID', 'LET',
     'SHE', 'TOO', 'USE', 'DAD', 'MOM', 'SOU', 'COM', 'QUE',
-    'POR', 'UMA', 'DOS', 'DAS', 'NOS', 'IDA', 'DIA', 'VOO',
-    'MEU', 'SEM', 'MAS', 'FAZ', 'TEM', 'VOU', 'SER', 'TAM', 'GOL', 'AZU',
+    'POR', 'UMA', 'DOS', 'DAS', 'NOS', 'IDA', 'DIA', 'VOO', 'VER',
+    'MEU', 'SEM', 'MAS', 'FAZ', 'TEM', 'VOU', 'SER', 'TAM', 'GOL', 'AZU', 'LAT',
   ]);
 
-  const validIata = iataCodes.filter((c) => !stopWords.has(c));
-
-  // ── Date extraction ──
-  const dates = extractDates(text);
-
-  // Deduplicate while preserving order
-  const uniqueIata = [...new Set(validIata)];
-
-  return {
-    origin: uniqueIata[0] ?? null,
-    destination: uniqueIata[1] ?? null,
-    departureDate: dates[0] ?? null,
-    returnDate: dates[1] ?? null,
-  };
+  return iataCodes.filter((c) => !stopWords.has(c));
 }
 
 /**

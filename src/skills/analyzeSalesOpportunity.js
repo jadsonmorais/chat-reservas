@@ -33,29 +33,28 @@ export default function analyzeSalesOpportunity({
   let opportunityLevel;
 
   if (price <= priceLow) {
-    // ── Great deal — high opportunity ──
+    // ── High Opportunity ──
     opportunityLevel = 'high';
     suggestions.push(
-      `✈️ Voo muito barato (${formatCurrency(price)})! Oportunidade de fechar rápido.`,
-      `🏨 Sugerir upgrade de quarto — o cliente está economizando no aéreo.`,
-      `🍾 Oferecer pacote de experiência premium (spa, jantar, transfer privativo).`,
-      `📦 Propor combo voo + hotel com margem extra para o resort.`,
+      `🎯 *Insight:* Tarifa extremamente competitiva detected (${formatCurrency(price)}).`,
+      `💰 *Estratégia:* O cliente possui alta margem de economia. Priorizar oferta de upgrade para suíte premium ou reserva de 1 noite extra.`,
+      `✨ *Incentivo:* Propor pacote 'Experience' (jantar romântico ou SPA) como cortesia pelo fechamento imediato.`,
     );
   } else if (price <= priceMedium) {
-    // ── Fair price — medium opportunity ──
+    // ── Medium Opportunity ──
     opportunityLevel = 'medium';
     suggestions.push(
-      `✈️ Preço justo (${formatCurrency(price)}). Boa janela de venda.`,
-      `🏨 Oferecer upgrade de categoria com desconto de cortesia.`,
-      `🚗 Sugerir transfer aeroporto–hotel como valor agregado.`,
+      `📊 *Insight:* Preço dentro da expectativa de mercado (${formatCurrency(price)}).`,
+      `🔄 *Estratégia:* Gatilho de escassez — informar que restam poucas vagas no hotel para o período, ancorando no valor do voo.`,
+      `🚗 *Valor Agregado:* Cortesia de transfer round-trip aeroporto-hotel pode ser o diferencial para conversão agora.`,
     );
   } else {
-    // ── Expensive — lower opportunity, but still worth offering value ──
+    // ── Low Opportunity ──
     opportunityLevel = 'low';
     suggestions.push(
-      `✈️ Voo com preço elevado (${formatCurrency(price)}).`,
-      `💡 Destacar flexibilidade de datas para buscar tarifas menores.`,
-      `🎁 Oferecer crédito no resort como incentivo de fechamento.`,
+      `⚠️ *Atenção:* Custo de transporte elevado (${formatCurrency(price)}). Risco de desistência do hotel.`,
+      `📉 *Contorno:* Sugerir datas de partida +/- 2 dias. Frequentemente reduz custos em até 30%.`,
+      `🎁 *Retenção:* Oferecer crédito de consumo no resort (ex: R$ 300) para amortizar psicologicamente o custo do aéreo.`,
     );
   }
 

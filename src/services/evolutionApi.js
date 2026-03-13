@@ -77,22 +77,12 @@ export function formatResponse({
 
 /**
  * Build the human-readable text message from flight results.
- *
- * @param {object} params
- * @param {object|null} params.bestFlight
- * @param {object|null} params.cheapestFlight
- * @param {string} params.origin
- * @param {string} params.destination
- * @param {string} params.departureDate
- * @param {string} [params.returnDate]
- * @param {string} params.opportunityLevel
- * @param {string[]} params.suggestions
- * @returns {string}
+ * Supports both single-origin and multi-hub results.
  */
 export function buildHumanMessage({
   bestFlight,
   cheapestFlight,
-  origin,
+  multiResults, // Array of { origin, flightResults, opportunity }
   destination,
   departureDate,
   returnDate,
@@ -101,45 +91,88 @@ export function buildHumanMessage({
 }) {
   const lines = [];
 
-  lines.push(`✈️ *Resultado da busca de voos*`);
-  lines.push(`📍 ${origin} → ${destination}`);
-  lines.push(`📅 Ida: ${departureDate}${returnDate ? ` | Volta: ${returnDate}` : ' (somente ida)'}`);
-  lines.push('');
+  lines.push(`🚀 *ANÁLISE TÉCNICA DE MALHA AÉREA*`);
+  lines.push(`🎯 Destino: *${destination.toUpperCase()}*`);
+  lines.push(`📅 Período: ${departureDate}${returnDate ? ` até ${returnDate}` : ' (Somente Ida)'}`);
+  lines.push('────────────────────────');
 
-  if (bestFlight) {
-    lines.push(`🏆 *Melhor Voo:*`);
-    lines.push(formatFlightSummary(bestFlight));
+  if (multiResults && multiResults.length > 0) {
+    // ── Multi-Hub Aggregation ──
+    const successfulResults = multiResults.filter(r => !r.error && (r.flightResults.bestFlight || r.flightResults.cheapestFlight));
+    
+    if (successfulResults.length === 0) {
+      lines.push('⚠️ Nenhuma opção viável encontrada nos principais hubs para estas datas.');
+      return lines.join('\n');
+    }
+
+    // Sort by price to find the global best deal
+    const globalOptions = successfulResults.map(r => ({
+      origin: r.origin,
+      price: r.flightResults.cheapestFlight?.price || r.flightResults.bestFlight?.price,
+      opportunity: r.opportunity,
+      flight: r.flightResults.cheapestFlight || r.flightResults.bestFlight
+    })).sort((a, b) => (a.price || Infinity) - (b.price || Infinity));
+
+    const bestGlobal = globalOptions[0];
+
+    lines.push(`🌟 *MELHOR OPORTUNIDADE GLOBAL*`);
+    lines.push(`📍 Origem: *${bestGlobal.origin}*`);
+    lines.push(`💰 Preço: ${formatCurrency(bestGlobal.price)}`);
+    lines.push(`📊 Status: ${getEmojiBadge(bestGlobal.opportunity.opportunityLevel)}`);
     lines.push('');
-  }
+    lines.push('📋 *RESUMO POR HUB (MÉDIA DE PREÇO)*');
+    
+    successfulResults.forEach(res => {
+      const p = res.flightResults.cheapestFlight?.price || res.flightResults.bestFlight?.price;
+      const status = getEmojiBadge(res.opportunity.opportunityLevel);
+      lines.push(`${status} *${res.origin}*: ${p ? formatCurrency(p) : 'N/A'}`);
+    });
 
-  if (cheapestFlight && cheapestFlight !== bestFlight) {
-    lines.push(`💰 *Voo Mais Barato:*`);
-    lines.push(formatFlightSummary(cheapestFlight));
     lines.push('');
-  }
+    lines.push('💡 *INSIGHTS E ESTRATÉGIA DE CONVERSÃO*');
+    
+    // Aggregate distinct suggestions
+    const allSuggestions = [...new Set(successfulResults.flatMap(r => r.opportunity.suggestions))];
+    allSuggestions.slice(0, 4).forEach(s => lines.push(` • ${s}`));
 
-  if (!bestFlight && !cheapestFlight) {
-    lines.push('⚠️ Nenhum voo encontrado para essa rota e data.');
-    return lines.join('\n');
-  }
+  } else {
+    // ── Single Result (Legacy/Specific) ──
+    lines.push(`📍 Rota: *${multiResults?.[0]?.origin || 'Origem'}* → *${destination}*`);
+    lines.push('');
 
-  // Opportunity badge
-  const badge = {
-    high: '🟢 OPORTUNIDADE ALTA',
-    medium: '🟡 OPORTUNIDADE MÉDIA',
-    low: '🔴 OPORTUNIDADE BAIXA',
-    unknown: '⚪ SEM DADOS',
-  }[opportunityLevel] ?? '⚪ SEM DADOS';
+    if (bestFlight) {
+      lines.push(`🏆 *Opção Recomendada:*`);
+      lines.push(formatFlightSummary(bestFlight));
+      lines.push('');
+    }
 
-  lines.push(`📊 *Análise:* ${badge}`);
-  lines.push('');
+    const badge = getEmojiBadge(opportunityLevel);
+    lines.push(`📊 *Análise de Mercado:* ${badge}`);
+    lines.push('');
 
-  if (suggestions.length > 0) {
-    lines.push('💡 *Sugestões de venda:*');
-    suggestions.forEach((s) => lines.push(`  • ${s}`));
+    if (suggestions && suggestions.length > 0) {
+      lines.push('💡 *Direcionamento de Venda:*');
+      suggestions.forEach((s) => lines.push(` • ${s}`));
+    }
   }
 
   return lines.join('\n');
+}
+
+function getEmojiBadge(level) {
+  return {
+    high: '🟢 ALTA',
+    medium: '🟡 MÉDIA',
+    low: '🔴 BAIXA',
+    unknown: '⚪ N/A',
+  }[level] ?? '⚪ N/A';
+}
+
+function formatCurrency(value) {
+  return new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+  }).format(value);
 }
 
 // ── Internal helpers ────────────────────────────────────────
