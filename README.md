@@ -7,6 +7,7 @@ By analyzing flight prices against predefined thresholds, it proactively suggest
 ## ✨ Features
 
 - **WhatsApp Integration:** Built on top of [Evolution API v2](https://evoapicloud.com/) for seamless WhatsApp messaging.
+- **Web Test interface:** Built-in chat UI for rapid testing without needing a phone.
 - **Flight Data:** Uses SerpApi to perform real-time searches on Google Flights to find the best and cheapest flights.
 - **Intelligent Routing & Memory:** The Node.js agent interprets intent and remembers conversation context, acting as a smart proxy between APIs.
 - **Sales Opportunities Detection:** Evaluates flight prices (e.g., flight was cheaper than expected) to identify clear upsell opportunities for the reservation team.
@@ -32,35 +33,47 @@ Clone the repository and prepare your environment variables:
 ```bash
 cp .env.example .env
 ```
-Open the `.env` file and fill in your keys, specifically:
-- `SERPAPI_KEY`
-- `EVOLUTION_API_KEY` (you can choose any secure string for the local Evolution manager)
-
-*(Note: The `DATABASE_URL` and `EVOLUTION_API_URL` internal paths are natively overridden inside `docker-compose.yml` for network mapping, so you don't need to change them in your `.env` for local Docker runs).*
+Open the `.env` file and fill in your keys.
 
 ### 2. Run the Stack
-Start everything using Docker Compose. The `app` will be built automatically from the root `Dockerfile`:
 ```bash
 docker-compose up -d --build
 ```
-This stands up Postgres, Redis, Evolution API, n8n, and your Node.js application all at once.
 
-### 3. Connect WhatsApp
-1. Navigate to your Evolution API Manager UI or hit the `/instance/create` endpoint locally (Port `8080`).
-2. Create an instance with the type `WHATSAPP-BAILEYS`.
-3. Read the generated QR code with your WhatsApp app on your phone.
-4. Configure the instance's webhook to point to `http://chat_reservas_app:3000/webhook/evolution`, subscribing to the `messages.upsert` event.
+## 🧪 Testing with Web Interface
 
-*(If you ever face an issue where the QR Code refuses to display, ensure that your `CONFIG_SESSION_PHONE_VERSION` in `docker-compose` matches a recent WhatsApp Web rollout).*
+Access the simplified chat interface (perfect for quick tests without WhatsApp):
+👉 **[http://localhost:3000](http://localhost:3000)**
 
-## 🧪 Testing Locally
+### 💡 Example Prompts (What to type)
 
-If you prefer to test the agent logic without sending messages through a paired WhatsApp number, you can simulate a conversation directly through the Node.js API test endpoint:
+- **Standard Search:** `"Voo de GRU para FOR no dia 20/05/2026"`
+- **Round-trip (Context):** `"Preciso ir de São Paulo para Miami dia 15/04/2026 e voltar dia 22/04/2026"`
+- **Vague Request (Memory Test):** `"Quero viajar para Paris saindo de GRU"` (The bot will ask for the missing date).
+- **Price Sensitivity:** `"Busque o voo mais barato de GIG para FOR amanhã"`
 
-```bash
-curl -X POST -H "Content-Type: application/json" \
-  -d '{"conversationId":"test-123","message":"Olá, preciso buscar um voo saindo de GRU para MIA dia 15/04/2026", "customerPhone":"+5511999999999"}' \
-  http://localhost:3000/test/message
-```
+## 💼 Business Use Cases
 
-The app is mapped locally on port `3000`. You can also check its health at `http://localhost:3000/health`.
+### 1. Upsell Optimization
+When the agent detects an **Opportunity: High** (Price below threshold), it suggests:
+- Proposing a room upgrade since the flight was cheaper than expected.
+- Offering a "Flight + Resort" package with a better margin.
+
+### 2. Recovery Strategy
+When the agent detects an **Opportunity: Low** (Price above threshold), it suggests:
+- Highlighting date flexibility to the client.
+- Offering a resort credit (e.g., $50 SPA voucher) to offset the expensive airfare and secure the hotel booking.
+
+### 3. Lead Qualification
+The system automatically logs every search in **PostgreSQL**, allowing the sales team to:
+- See what destinations are most searched.
+- Follow up with users who looked for flights but haven't booked the hotel yet.
+
+---
+
+## 🛠️ Configuration
+
+You can adjust the "Opportunity" triggers in the `.env` or code:
+- `PRICE_THRESHOLD_LOW`: Below this price, the opportunity is **HIGH** (🟢).
+- `PRICE_THRESHOLD_MEDIUM`: Above this but below a second threshold, it's **MEDIUM** (🟡).
+- Default: Flights above 600 BRL are considered **LOW** opportunity (🔴) in terms of price-based upsell.
