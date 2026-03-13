@@ -1,0 +1,72 @@
+﻿
+Tip: Want real-time updates to your database without manual polling? Discover how with Pulse: https://pris.ly/tip-0-pulse
+
+Prisma generate succeeded
+
+> evolution-api@2.2.3 start:prod
+> node dist/main
+
+[1m[37m[Evolution API][0m [1m[37m  [1m[37m v2.2.3 [1m[37m 268 [0m [1m[37m - [1m[37m Thu Mar 12 2026 23:48:25   [0m [37m[47m[1m VERBOSE [0m [33m[1m [CacheEngine][0m [37m[1m [string][0m [37m RedisCache initialized for groups [0m
+[1m[37m[Evolution API][0m [1m[37m  [1m[37m v2.2.3 [1m[37m 268 [0m [1m[37m - [1m[37m Thu Mar 12 2026 23:48:25   [0m [37m[47m[1m VERBOSE [0m [33m[1m [CacheService][0m [37m[1m [string][0m [37m cacheservice created using cache engine: Gt [0m
+docker : ÔöîÔöÇÔöÇÔöÇÔö
+ÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔ
+öÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö
+ÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔ
+öÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö
+ÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔ
+öÉ
+No linha:1 caractere:57
++ ... Seconds 5 ; 
+docker logs --tail 20 
+evolution_api > 
+evo_logs.txt 2>&1 ; ...
++                 ~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~
+~~~~
+    + CategoryInfo     
+         : NotSpecifi  
+  ed: (ÔöîÔöÇÔöÇÔöÇÔ   
+ öÇ...ÔöÇÔöÇÔöÇÔöÇÔ    
+öÉ:String) [], Rem    
+oteException
+    + FullyQualifiedEr 
+   rorId : NativeComm  
+  andError
+ 
+Ôöé  Update available 
+6.3.0 -> 7.5.0         
+               Ôöé
+Ôöé                    
+                       
+              Ôöé
+Ôöé  This is a major 
+update - please follow 
+the guide at    Ôöé
+Ôöé  https://pris.ly/d/
+major-version-upgrade  
+              Ôöé
+Ôöé                    
+                       
+              Ôöé
+Ôöé  Run the following 
+to update              
+              Ôöé
+Ôöé    npm i 
+--save-dev 
+prisma@latest          
+             Ôöé
+Ôöé    npm i 
+@prisma/client@latest  
+                       
+ Ôöé
+ÔööÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö
+ÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔ
+öÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö
+ÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔ
+öÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö
+ÇÔöÇÔöÇÔöÇÔöÇÔöÿ

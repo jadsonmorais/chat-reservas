@@ -1,0 +1,29 @@
+# ── Docker Compose / PostgreSQL ──────────────────────────
+POSTGRES_USER=appuser
+POSTGRES_PASSWORD=Kijs_ss_566dsa_2025!
+POSTGRES_DB=postgres
+TZ=America/Sao_Paulo
+
+# Host do PostgreSQL:
+#   Treino (docker-compose.treino.yml)  → postgres   (nome do serviço Docker)
+#   Produção (docker-compose.producao.yml) → host.docker.internal  (postgres do servidor)
+POSTGRES_HOST=postgres
+
+# Connection string used by the Node.js app (points to Docker-mapped port)
+DATABASE_URL=postgresql://appuser:Kijs_ss_566dsa_2025!@localhost:5432/carmeldb
+
+# ── SerpApi (Google Flights) ─────────────────────────────
+SERPAPI_KEY=aaaaa
+
+# ── Evolution API (WhatsApp Gateway) ─────────────────────
+EVOLUTION_API_URL=http://localhost:8080
+EVOLUTION_API_KEY=sua_chave_de_api_aqui
+EVOLUTION_INSTANCE_NAME=tst1
+
+# ── Server ───────────────────────────────────────────────
+PORT=3001
+
+# ── Sales Thresholds (optional overrides) ────────────────
+# Prices in USD — flights below these trigger upsell suggestions
+PRICE_THRESHOLD_LOW=300
+PRICE_THRESHOLD_MEDIUM=600
