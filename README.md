@@ -1,79 +1,94 @@
-# 🏨 Chat Reservas — Agente de Reservas Inteligente
+# 🏨 Chat Reservas — Plataforma de Inteligência Comercial
 
-O Chat Reservas é um agente de elite para equipes de reservas de hotéis de luxo. Ele transforma o **WhatsApp** em um terminal de inteligência comercial, utilizando **Node.js**, **PostgreSQL** e **SerpApi (Google Flights)** para monitorar malhas aéreas e criar oportunidades de venda em tempo real.
+Chat Reservas é uma plataforma de inteligência comercial para equipes de reservas de resorts de luxo no Ceará. Transforma o **WhatsApp** em um terminal de análise em tempo real: preços de voo, radar competitivo, janelas de captação e ranking de hubs — tudo via menu interativo, com o mínimo de input do usuário.
 
-O grande diferencial: o agente não apenas busca voos, ele **analisa criticamente** os dados para sugerir upgrades, pacotes de cortesia ou estratégias de retenção baseadas no custo de transporte do hóspede.
-
-## ✨ Super-Poderes do Agente
-
-- **🚀 Análise Técnica de Malha Aérea:** Capaz de monitorar os 7 principais hubs do Brasil (**GRU, BSB, GIG, CNF, VCP, REC, SSA**) simultaneamente para encontrar a melhor porta de entrada para o seu resort.
-- **🧠 Prioridade de Contexto Inteligente:** O agente entende mudanças de plano. Se você alterar a data ou o destino na última mensagem, ele descarta o contexto antigo e foca no novo.
-- **🗺️ Mapeamento Semântico de Cidades:** Entende "Fortaleza", "Ceará", "São Paulo" e outros, mapeando automaticamente para os códigos aeroportuários (IATA) corretos.
-- **🏢 Dashboards de Oportunidade:** Gera um relatório visual com badges de status (🟢 Alta, 🟡 Média, 🔴 Baixa) e estratégias de conversão personalizadas.
-- **📱 Interface de Teste Web Própria:** Chat interativo em tempo real para simulações e ajustes sem necessidade de celular.
-
-## 🏗️ Stack Tecnológica
-
-O ecossistema é orquestrado via Docker e inclui:
-1. **Agente Inteligente (Node.js):** O cérebro que processa linguagem natural e orquestra as APIs.
-2. **Evolution API v2:** Conexão robusta e estável com WhatsApp via Baileys.
-3. **PostgreSQL 15:** Memória persistente de buscas, transações e histórico de leads.
-4. **Redis:** Alta performance para cache e mensageria.
-5. **n8n:** Pronto para automações avançadas de fluxo de trabalho.
-
-## 🚀 Como Começar (3 Minutos)
-
-### 1. Preparar o Ambiente
-```bash
-cp .env.example .env
-```
-Adicione sua `SERPAPI_KEY` e defina sua `EVOLUTION_API_KEY`.
-
-### 2. Lançar no Docker
-```bash
-docker-compose up -d --build
-```
-
-### 3. Acessar a Interface
-👉 **[http://localhost:3000](http://localhost:3000)**
+O diferencial: o agente não apenas busca voos, ele **gera estratégias de venda** baseadas no custo de transporte do hóspede, com insights narrativos via **Claude AI (Anthropic)**.
 
 ---
 
-## 💡 Como Usar: Exemplos de Impacto
+## 🗂️ Três Camadas de Entrega
 
-O agente responde a comandos naturais de alto nível:
+| Fase | Status | Descrição |
+| :--- | :--- | :--- |
+| **1 — Chat WhatsApp** | ✅ Ativo | Agente conversacional com menu de 5 fluxos comerciais |
+| **2 — BI Metabase** | 🔧 Em desenvolvimento | Dashboards self-service conectados direto ao PostgreSQL |
+| **3 — Portal Intranet** | 📋 Planejado | Interface web unificada (Flask) integrando chat + BI |
 
-### ⚡ Consulta de Hubs (Ideal para o Reservas)
-> *"Quero ver oportunidades de todos os principais hubs para Fortaleza no dia 15/05/2026"*
+---
 
-**Resultado:** O bot fará uma varredura em todo o Brasil, trará o resumo de preços de cada aeroporto principal e destacará a **Melhor Oportunidade Global** para o seu time focar a venda.
+## ✨ Fluxos Disponíveis (menu interativo)
 
-### 🔄 Ajuste Rápido (Prioridade de Mensagem)
-> *"Mude para o dia 20/05"*
+Envie **menu**, **oi** ou **ajuda** para abrir o menu. Responda com o número:
 
-**Resultado:** O sistema automaticamente mantém o destino e origem anteriores, mas atualiza rigidamente a data para o novo pedido, limpando contextos irrelevantes (como uma data de volta antiga).
+| # | Fluxo | O que faz |
+| :--- | :--- | :--- |
+| **1** | Mercado hoje | Busca voos de todos os 7 hubs → Fortaleza na próxima sexta |
+| **2** | Radar competitivo | Compara Fortaleza vs destinos de luxo concorrentes (Trancoso, Noronha, Búzios…) |
+| **3** | Melhor janela | Varre os próximos 14 dias e ranqueia os melhores dias para captação |
+| **4** | Ranking de hubs | Qual cidade tem o voo mais barato agora |
+| **5** | Busca específica | Origem, destino e data personalizados |
 
-### 🏖️ Busca por Nome de Cidade
-> *"Voo de São Paulo para Fortaleza amanhã"*
+---
 
-**Resultado:** Mapeamento instantâneo (GRU → FOR) e análise de oportunidade imediata.
+## 🏗️ Stack Tecnológica
+
+```
+Runtime:     Node.js 22 (Alpine, Docker)
+Framework:   Express.js
+Banco:       PostgreSQL 15
+Cache:       Redis (Alpine)
+WhatsApp:    Evolution API v2 (via Baileys)
+Voos:        SerpApi — Google Flights engine
+IA:          Anthropic SDK — Claude Haiku (insights narrativos)
+BI:          Metabase (porta 3001)
+Automação:   n8n (opcional)
+```
+
+---
+
+## 🚀 Como Começar
+
+### Ambiente de desenvolvimento
+```bash
+cp .env.example .env
+# Preencha SERPAPI_KEY, EVOLUTION_API_*, ANTHROPIC_API_KEY
+docker compose up -d --build
+```
+
+### Ambiente de treino (com Metabase)
+```bash
+docker compose -f docker-compose.treino.yml up -d --build
+```
+Acesse: `http://localhost:3000` (chat) · `http://localhost:3001` (Metabase)
+
+### Ambiente de produção (PostgreSQL externo)
+```bash
+# 1. Rodar UMA VEZ antes do primeiro deploy:
+bash scripts/init-prod-db.sh
+
+# 2. Subir os containers:
+docker compose -f docker-compose.producao.yml up -d --build
+```
 
 ---
 
 ## 💼 Estratégias de Venda Automáticas
 
-O Agente gera 'Insights de Conversão' baseados no preço encontrado:
-
-| Status | Cenário | Estratégia do Bot |
+| Status | Cenário | Estratégia |
 | :--- | :--- | :--- |
-| **🟢 ALTA** | Voo mais barato que a média | Sugerir upgrade para Suíte Master ("Economize no voo, invista no conforto"). |
-| **🟡 MÉDIA** | Preço padrão de mercado | Usar gatilho de escassez no hotel ("Vagas limitadas para este período"). |
-| **🔴 BAIXA** | Voo caro ou com escalas | Oferecer crédito de resort (R$ 300) para amortizar o custo do aéreo e garantir o hotel. |
+| 🟢 **ALTA** | Voo barato | Sugerir upgrade de suíte ("economizou no voo, invista no conforto") |
+| 🟡 **MÉDIA** | Preço padrão | Gatilho de escassez ("poucos quartos disponíveis neste período") |
+| 🔴 **BAIXA** | Voo caro | Oferecer crédito resort para amortizar o custo do aéreo |
 
 ---
 
-## 🛠️ Configuração de Gatilhos (.env)
+## 🛠️ Variáveis de Ambiente
 
-Ajuste o comportamento do "cérebro" comercial:
-- `PRICE_THRESHOLD_LOW=500`: Abaixo disso, o bot entra em modo "Agressivo de Upsell".
-- `PRICE_THRESHOLD_MEDIUM=1000`: Acima disso, o bot foca em estratégias de "Retenção de Cliente".
+| Variável | Uso |
+| :--- | :--- |
+| `SERPAPI_KEY` | Google Flights via SerpApi |
+| `EVOLUTION_API_URL/KEY/INSTANCE_NAME` | Conexão WhatsApp |
+| `ANTHROPIC_API_KEY` | Insights narrativos via Claude (opcional — degrada graciosamente) |
+| `POSTGRES_USER/PASSWORD/DB/HOST` | Banco de dados |
+| `PRICE_THRESHOLD_LOW` | Abaixo → upsell agressivo (ex: `500`) |
+| `PRICE_THRESHOLD_MEDIUM` | Acima → estratégia de retenção (ex: `1000`) |
