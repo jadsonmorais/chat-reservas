@@ -1,0 +1,3047 @@
+Directory structure:
+└── jadsonmorais-intranet/
+    ├── config.py
+    ├── DEPLOY_SHEETS_SYNC.md
+    ├── example.env
+    ├── import_users_csv.py
+    ├── migrate_add_user_sector.py
+    ├── requirements.txt
+    ├── run.py
+    ├── seed.py
+    ├── usuarios.csv
+    ├── .env.example
+    └── app/
+        ├── __init__.py
+        ├── admin.py
+        ├── admin_guard.py
+        ├── auth.py
+        ├── extensions.py
+        ├── models.py
+        ├── routes.py
+        ├── static/
+        │   └── css/
+        │       └── style.css
+        └── templates/
+            ├── area_bi.html
+            ├── base.html
+            ├── dashboard_embed.html
+            ├── login.html
+            └── admin/
+                ├── _nav.html
+                ├── dashboard_form.html
+                ├── dashboard_import.html
+                ├── dashboards.html
+                ├── index.html
+                └── user_permissions.html
+
+================================================
+FILE: config.py
+================================================
+import os
+
+
+class Config:
+    SECRET_KEY = os.environ.get("SECRET_KEY", "troque-esta-chave")
+
+    SQLALCHEMY_DATABASE_URI = os.environ.get(
+        "DATABASE_URL",
+        "sqlite:///intranet_carmel.db"
+    )
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
+
+    GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+    GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+    GOOGLE_DISCOVERY_URL = "https://accounts.google.com/.well-known/openid-configuration"
+
+    ZOHO_ACCOUNTS_URL = os.environ.get("ZOHO_ACCOUNTS_URL", "https://accounts.zoho.com")
+    ZOHO_CLIENT_ID = os.environ.get("ZOHO_CLIENT_ID")
+    ZOHO_CLIENT_SECRET = os.environ.get("ZOHO_CLIENT_SECRET")
+
+    GOOGLE_SHEETS_CREDENTIALS_PATH = os.environ.get("GOOGLE_SHEETS_CREDENTIALS_PATH")
+    GOOGLE_SHEETS_ID = os.environ.get("GOOGLE_SHEETS_ID")
+    GOOGLE_SHEETS_TAB = os.environ.get("GOOGLE_SHEETS_TAB")
+
+    # 👇 NOVO
+    SERVER_NAME = os.environ.get("SERVER_NAME")  # ex: intranet.cm
+    PREFERRED_URL_SCHEME = "https"
+
+    # ✅ agora aceita múltiplos domínios
+    ALLOWED_EMAIL_DOMAINS = [
+        "carmelhoteis.com.br",
+        "carmelcharme.com.br",
+        "carmelcumbuco.com.br",
+        "carmeltaiba.com.br",
+        "magnapraiahotel.com.br",
+        "magnaloc.com.br",
+        "gmail.com"
+    ]
+
+
+
+================================================
+FILE: DEPLOY_SHEETS_SYNC.md
+================================================
+# Sincronizacao de Dashboards via Google Sheets
+
+Este guia explica como configurar a Service Account no servidor (fora do Git)
+para permitir o sync automatico dos dashboards pela planilha.
+
+## 1) Criar Service Account
+1. Acesse o Google Cloud Console.
+2. Crie ou selecione um projeto.
+3. Habilite a API: "Google Sheets API".
+4. Va em "IAM & Admin" > "Service Accounts".
+5. Crie uma Service Account.
+6. Crie uma chave JSON e faca o download.
+
+## 2) Compartilhar a planilha com a Service Account
+1. Abra a planilha no Google Sheets.
+2. Clique em "Compartilhar".
+3. Adicione o e-mail da Service Account (termina com `iam.gserviceaccount.com`).
+4. Permissao: "Leitor".
+
+## 3) Subir o JSON no servidor (fora do Git)
+1. Copie o JSON para o servidor em:
+   `instance/google-service-account.json`
+2. Nao commitar este arquivo no Git.
+
+## 4) Configurar variaveis de ambiente no servidor
+Defina as variaveis abaixo (ex.: no `.env` do servidor):
+
+```
+GOOGLE_SHEETS_CREDENTIALS_PATH=instance/google-service-account.json
+GOOGLE_SHEETS_ID=1Gj4ol8tQzFtdIYbYNIexTy2AnfsbXM3A86E3KWqkgCA
+GOOGLE_SHEETS_TAB=dashboard_import_template
+```
+
+## 5) Dependencias
+Instale as dependencias no servidor:
+
+```
+pip install -r requirements.txt
+```
+
+## 6) Validacao
+Depois de configurar, o botao "Sincronizar do Sheets" no admin deve:
+- Ler a aba informada.
+- Atualizar dashboards por slug.
+- Remover dashboards ausentes (se marcado).
+
+Em caso de erro, verificar:
+- Permissoes da planilha para a Service Account.
+- Caminho do JSON e permissoes de leitura no servidor.
+- ID da planilha e nome da aba.
+
+
+
+================================================
+FILE: example.env
+================================================
+GOOGLE_SHEETS_CREDENTIALS_PATH=instance/google-service-account.json
+GOOGLE_SHEETS_ID=1Gj4ol8tssssCA
+GOOGLE_SHEETS_TAB=dashboard_import_template
+DATABASE_URL=postgresql://appuser:afasfas25!@10.197.3.2:5432/carmeldb
+ZOHO_ACCOUNTS_URL=https://accounts.zoho.com
+ZOHO_CLIENT_ID=1afsafasfaaf
+ZOHO_CLIENT_SECRET=afsafasfasfasfasfasfas
+
+
+
+================================================
+FILE: import_users_csv.py
+================================================
+import csv
+import sqlite3
+from pathlib import Path
+
+DB_PATH = Path("instance/intranet_carmel.db")
+CSV_PATH = Path("usuarios.csv")  # seu arquivo
+
+EMAIL_KEYS = {"email", "e-mail", "mail", "usuario", "usuário", "login"}
+SETOR_KEYS = {"setor", "sector", "departamento", "area", "área"}
+
+def norm_key(s: str) -> str:
+    return (s or "").strip().lower()
+
+def norm_val(s: str) -> str:
+    return (s or "").strip()
+
+def find_column(fieldnames, accepted_keys):
+    if not fieldnames:
+        return None
+    for col in fieldnames:
+        if norm_key(col) in accepted_keys:
+            return col
+    return None
+
+def detect_dialect(file_obj):
+    """
+    Detecta automaticamente se é ; , ou TAB.
+    """
+    sample = file_obj.read(4096)
+    file_obj.seek(0)
+
+    # tenta sniff
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=";,\t")
+        return dialect
+    except Exception:
+        # fallback: tenta adivinhar pelo cabeçalho
+        first_line = sample.splitlines()[0] if sample else ""
+        if ";" in first_line:
+            class D(csv.excel):
+                delimiter = ";"
+            return D()
+        if "\t" in first_line:
+            class D(csv.excel_tab):
+                delimiter = "\t"
+            return D()
+        return csv.excel  # vírgula
+
+def main():
+    if not DB_PATH.exists():
+        raise FileNotFoundError(f"Banco não encontrado: {DB_PATH.resolve()}")
+
+    if not CSV_PATH.exists():
+        raise FileNotFoundError(f"CSV não encontrado: {CSV_PATH.resolve()}")
+
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    created = 0
+    updated = 0
+    skipped = 0
+    invalid = 0
+
+    with open(CSV_PATH, "r", newline="", encoding="utf-8-sig") as f:
+        dialect = detect_dialect(f)
+        reader = csv.DictReader(f, dialect=dialect)
+
+        # ✅ agora fieldnames vai virar ['EMAIL', 'SETOR'] certinho
+        email_col = find_column(reader.fieldnames, EMAIL_KEYS)
+        setor_col = find_column(reader.fieldnames, SETOR_KEYS)
+
+        if not email_col:
+            raise ValueError(
+                f"CSV não possui coluna de EMAIL. Cabeçalhos encontrados: {reader.fieldnames}"
+            )
+
+        if not setor_col:
+            print("⚠️ CSV não possui coluna de SETOR. Vou apenas criar usuários sem setor.")
+
+        for row in reader:
+            email = norm_val(row.get(email_col)).lower()
+            setor = norm_val(row.get(setor_col)) if setor_col else ""
+
+            if not email or "@" not in email:
+                invalid += 1
+                continue
+
+            cur.execute("SELECT id, sector FROM user WHERE email = ?", (email,))
+            existing = cur.fetchone()
+
+            if existing:
+                user_id, current_sector = existing
+
+                # ✅ Só atualiza setor se CSV trouxer setor preenchido
+                if setor:
+                    cur.execute("UPDATE user SET sector = ? WHERE id = ?", (setor, user_id))
+                    updated += 1
+                else:
+                    skipped += 1
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO user (email, name, sector, active, is_admin)
+                    VALUES (?, '', ?, 1, 0)
+                    """,
+                    (email, setor if setor else None)
+                )
+                created += 1
+
+    conn.commit()
+    conn.close()
+
+    print("IMPORTAÇÃO FINALIZADA")
+    print(f"Usuários criados: {created}")
+    print(f"Setores atualizados: {updated}")
+    print(f"Ignorados (sem setor): {skipped}")
+    print(f"Inválidos/sem email: {invalid}")
+
+if __name__ == "__main__":
+    main()
+
+
+
+================================================
+FILE: migrate_add_user_sector.py
+================================================
+import sqlite3
+from pathlib import Path
+
+DB_PATH = Path("instance/intranet_carmel.db")
+
+def column_exists(conn, table: str, column: str) -> bool:
+    cur = conn.execute(f"PRAGMA table_info({table});")
+    cols = [row[1] for row in cur.fetchall()]
+    return column in cols
+
+def main():
+    if not DB_PATH.exists():
+        raise FileNotFoundError(f"Banco não encontrado: {DB_PATH.resolve()}")
+
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        if column_exists(conn, "user", "sector"):
+            print("OK: coluna 'sector' já existe em user.")
+            return
+
+        conn.execute("ALTER TABLE user ADD COLUMN sector TEXT;")
+        conn.commit()
+        print("SUCESSO: coluna 'sector' adicionada na tabela user.")
+    finally:
+        conn.close()
+
+if __name__ == "__main__":
+    main()
+
+
+
+================================================
+FILE: requirements.txt
+================================================
+Flask>=3.0,<4.0
+Flask-Login>=0.6,<0.7
+Flask-SQLAlchemy>=3.1,<4.0
+Authlib>=1.3,<2.0
+python-dotenv>=1.0,<2.0
+requests>=2.31,<3.0
+google-auth>=2.29,<3.0
+google-api-python-client>=2.120,<3.0
+
+# PostgreSQL (OBRIGATÓRIO EM PRODUÇÃO)
+psycopg2-binary>=2.9,<3.0
+
+# Servidor WSGI (produção Linux)
+gunicorn>=21.2,<22.0
+
+
+
+================================================
+FILE: run.py
+================================================
+from dotenv import load_dotenv
+load_dotenv()
+
+from app import create_app
+
+app = create_app()
+
+if __name__ == "__main__":
+    app.run(debug=True)
+
+
+
+================================================
+FILE: seed.py
+================================================
+from app import create_app
+from app.extensions import db
+from app.models import Dashboard
+
+app = create_app()
+
+
+def seed_dashboards():
+    # coloque aqui os links certos do BI do GLPI
+    dashboards_data = [
+        {
+            "sector": "TI",
+            "name": "GLPI - Operacional",
+            "slug": "glpi-operacional",
+            "url": "https://app.powerbi.com/view?r=eyJrIjoiODU1NzA3YWItMGRiMy00YzhiLTgyODItNjE1YjdmZGY0MDcxIiwidCI6IjA0OGIzYWI0LWM4MTUtNDM2Zi04MzRkLTU2OTY3MzQ3YzI0ZCJ9"
+        },
+        {
+            "sector": "TI",
+            "name": "GLPI - Gerencial",
+            "slug": "glpi-gerencial",
+            "url": "https://app.powerbi.com/view?r=eyJrIjoiYjNjYzFkNzUtOTJkMy00ZmYzLThiMWUtNTdkOWZiZjliYTU0IiwidCI6IjA0OGIzYWI0LWM4MTUtNDM2Zi04MzRkLTU2OTY3MzQ3YzI0ZCJ9"
+        },
+    ]
+
+    for data in dashboards_data:
+        existe = Dashboard.query.filter_by(slug=data["slug"]).first()
+        if not existe:
+            dash = Dashboard(
+                sector=data["sector"],
+                name=data["name"],
+                slug=data["slug"],
+                url=data["url"],
+            )
+            db.session.add(dash)
+
+    db.session.commit()
+    print("Dashboards cadastrados / atualizados com sucesso!")
+
+
+if __name__ == "__main__":
+    with app.app_context():
+        seed_dashboards()
+
+
+
+================================================
+FILE: usuarios.csv
+================================================
+EMAIL;SETOR
+abilio.nunes@carmelhoteis.com.br;Manutencao
+admcomercial@carmelhoteis.com.br;Comercial e Reservas
+administracao@carmelcharme.com.br;Administracao
+administracao@carmelcumbuco.com.br;Administracao
+administracao@carmeltaiba.com.br;Administracao
+administracao@magnapraiahotel.com.br;Administracao
+admreservas@carmelhoteis.com.br;Comercial e Reservas
+alessandra.arruda@carmelhoteis.com.br;Recursos Humanos
+alexandre.pinheiro@carmelhoteis.com.br;Manutencao
+alexandre.rocha@carmelhoteis.com.br;Departamento Pessoal
+almoxarifado@carmelcharme.com.br;Almoxarifado
+almoxarifado@carmelcumbuco.com.br;Almoxarifado
+almoxarifado@carmeltaiba.com.br;Almoxarifado
+almoxarifado@magnapraiahotel.com.br;Almoxarifado
+alorem.pereira@carmelhoteis.com.br;Comercial e Reservas
+alyne.rocha@carmelhoteis.com.br;Manutencao
+amanda.melo@carmelhoteis.com.br;Diretoria
+ana.brito@carmelhoteis.com.br;Suprimentos
+ana.paula@carmelhoteis.com.br;Suprimentos
+ana.priscila@carmelhoteis.com.br;Suprimentos
+antonio.felix@carmelhoteis.com.br;
+atendimento@carmelcharme.com.br;Comercial e Reservas
+atendimento@carmelcumbuco.com.br;Comercial e Reservas
+atendimento@carmeltaiba.com.br;Comercial e Reservas
+atendimentoparceiro@carmelhoteis.com.br;Comercial e Reservas
+auditoriafinanceira@carmelhoteis.com.br;Financeiro
+auditoriafiscal@carmelcharme.com.br;Fiscal
+auditoriafiscal@carmelcumbuco.com.br;Fiscal
+auditoriafiscal@carmeltaiba.com.br;Fiscal
+auditoriafiscal@magnapraiahotel.com.br;Fiscal
+auditorianoturna@carmelcumbuco.com.br;Recepcao
+beatriz.mendes@carmelhoteis.com.br;Comercial e Reservas
+bianca.reis@carmelhoteis.com.br;Suprimentos
+brian.junior@magnaloc.com.br;Manutencao
+bruna.souza@carmelhoteis.com.br;Comercial e Reservas
+bruno.lima@carmelhoteis.com.br;Suprimentos
+camila.aguiar@carmelhoteis.com.br;Qualidade
+carla.pereira@carmelhoteis.com.br;Recursos Humanos
+chefe.manutencao@carmeltaiba.com.br;Recepcao
+chrecepcao@carmelcharme.com.br;Recepcao
+chrecepcao@carmelcumbuco.com.br;Recepcao
+chrecepcao@carmeltaiba.com.br;Recepcao
+cleide.bravo@carmelhoteis.com.br;Comercial e Reservas
+contabilidade@carmelcharme.com.br;Contabilidade
+contabilidade@carmelcumbuco.com.br;Contabilidade
+contabilidade@carmeltaiba.com.br;Contabilidade
+contabilidade@magnapraiahotel.com.br;Contabilidade
+contasapagar@carmelhoteis.com.br;Financeiro
+contasareceber@carmelhoteis.com.br;Financeiro
+contratos@carmelhoteis.com.br;Financeiro
+controle.aeb@magnapraiahotel.com.br;Controle
+controle@carmelcharme.com.br;Controle
+controle@carmelcumbuco.com.br;Controle
+controle@carmeltaiba.com.br;Controle
+coordenacaoaeb@carmeltaiba.com.br;Alimentos e Bebidas
+coordenacaoaeb@carmeltaiba.com.br;Alimentos e Bebidas
+coordmanutencao@carmeltaiba.com.br;Manutencao
+cozinha@carmelcharme.com.br;Alimentos e Bebidas
+cozinha@carmelcumbuco.com.br;Alimentos e Bebidas
+cozinha@carmeltaiba.com.br;Alimentos e Bebidas
+cozinha@magnapraiahotel.com.br;Alimentos e Bebidas
+cristiane.fogaca@carmeltaiba.com.br;
+daniel.cruz@carmelhoteis.com.br;
+daniela.sousa@carmelhoteis.com.br;Suprimentos
+danilo.nojoza@carmelhoteis.com.br;
+diretoria.operacional@carmelhoteis.com.br;Diretoria
+diretoria@carmelhoteis.com.br;Diretoria
+eduarda.souza@carmelhoteis.com.br;Suprimentos
+emanuela.bernardo@carmelhoteis.com.br;Recursos Humanos
+endomarketing@carmelhoteis.com.br;Comercial e Reservas
+estagiario@carmeltaiba.com.br;Administracao
+estagiariofiscal@carmelhoteis.com.br;Fiscal
+eventos@carmelhoteis.com.br;Comercial e Reservas
+fahad.padilha@carmelhoteis.com.br;Suprimentos
+faturamento@carmelhoteis.com.br;Financeiro
+felipe.damasio@carmelhoteis.com.br;Comercial e Reservas
+felipe.pontes@carmelcumbuco.com.br;Qualidade
+fernanda.velame@carmelhoteis.com.br;Recepcao
+financeiro@carmelcharme.com.br;Financeiro
+financeiro@carmelcumbuco.com.br;Financeiro
+financeiro@carmelhoteis.com.br;Financeiro
+financeiro@carmeltaiba.com.br;Financeiro
+financeiro@magnapraiahotel.com.br;Financeiro
+financeiro2@carmelhoteis.com.br;Financeiro
+flavio.costa@carmelhoteis.com.br;Financeiro
+francisco@carmelhoteis.com.br;Alimentos e Bebidas
+gabriele.alves@carmelhoteis.com.br;Recursos Humanos
+george.rocha@carmelhoteis.com.br;Suprimentos
+geovana.emilly@carmelhoteis.com.br;
+geovani.santiago@carmelhoteis.com.br;Comercial e Reservas
+gerencia@carmelcharme.com.br;Gerencia
+gerencia@carmeltaiba.com.br;Gerencia
+gerencia@magnapraiahotel.com.br;Gerencia
+gestaofinanceira@carmelhoteis.com.br;Financeiro
+governanca@carmelcharme.com.br;Governanca
+governanca@carmelcumbuco.com.br;Governanca
+governanca@carmeltaiba.com.br;Governanca
+governanca@magnapraiahotel.com.br;Governanca
+grace.guerreiro@carmelhoteis.com.br;Suprimentos
+henrique@carmeltaiba.com.br;Comercial e Reservas
+hospitalidade@carmelcharme.com.br;Governanca
+humberto.egydio@carmelhoteis.com.br;Diretoria
+iara.torres@carmelhoteis.com.br;Suprimentos
+icaro.almeida@carmelhoteis.com.br;Tecnologia Informacao
+isabela.viana@carmeltaiba.com.br;
+isabela.viana@carmeltaiba.com.br;
+ivonete.cordeiro@carmelhoteis.com.br;Departamento Pessoal
+jadson.morais@carmelhoteis.com.br;Tecnologia Informacao
+jailson.almeida@carmelhoteis.com.br;Qualidade
+janielle.rabelo@carmelhoteis.com.br;Recursos Humanos
+jefferson.cavalcante@carmelhoteis.com.br;Tecnologia Informacao
+jennyfer.lemos@carmelcharme.com.br;Recursos Humanos
+jessica.gyslaynne@carmelhoteis.com.br;Comercial e Reservas
+joisce.lopes@carmelhoteis.com.br;Recursos Humanos
+jose.junior@carmelhoteis.com.br;Suprimentos
+jose.todescato@carmelcumbuco.com.br;Gerencia
+juliana.alexandre@carmelhoteis.com.br;Departamento Pessoal
+juliana.batista@carmelhoteis.com.br;
+julio.cavalcante@carmelhoteis.com.br;Suprimentos
+kaio.emanuel@carmeltaiba.com.br;Recepcao
+karla.fernandes@carmelhoteis.com.br;Recursos Humanos
+kellyanne.duarte@carmelhoteis.com.br;
+kellyanne.duarte@carmelhoteis.com.br;
+kevin.almeida@carmelhoteis.com.br;Tecnologia Informacao
+lairton.santos@carmelhoteis.com.br;Qualidade
+lara.fernandes@carmelhoteis.com.br;Recursos Humanos
+lara.oliveira@carmelhoteis.com.br;Suprimentos
+larissa.moreira@carmelhoteis.com.br;Comercial e Reservas
+leonardo.leite@carmelhoteis.com.br;Almoxarifado
+leonardo.lopes@carmelhoteis.com.br;
+leonardo.malacarne@carmelhoteis.com.br;Suprimentos
+leticia.cavalcante@carmelhoteis.com.br;Comercial e Reservas
+lideraeb@carmelcharme.com.br;Alimentos e Bebidas
+livia.zuhaire@carmeltaiba.com.br;
+lucas.rafael@carmelhoteis.com.br;
+lucas.santos@carmelhoteis.com.br;Tecnologia Informacao
+lucas.souza@carmelhoteis.com.br;
+maitre@carmelcharme.com.br;Alimentos e Bebidas
+maitre@carmeltaiba.com.br;Alimentos e Bebidas
+maitre@magnapraiahotel.com.br;Alimentos e Bebidas
+manutencao@carmelcharme.com.br;Manutencao
+manutencao@carmelcumbuco.com.br;Manutencao
+manutencao@carmeltaiba.com.br;Manutencao
+manutencao@magnapraiahotel.com.br;Manutencao
+mateus.lima@carmelhoteis.com.br;Suprimentos
+mayara.sampaio@carmelhoteis.com.br;Comercial e Reservas
+meeting@carmelhoteis.com.br;Alimentos e Bebidas
+micaelly.coelho@carmelhoteis.com.br;Recursos Humanos
+miguel.tavares@carmelcharme.com.br;Qualidade
+mikaelly.alves@carmelhoteis.com.br;Manutencao
+milena.vieira@carmelhoteis.com.br;
+narcelio.sousa@carmelhoteis.com.br;Manutencao
+nataliana.vidal@carmelhoteis.com.br;Suprimentos
+nutricao@magnapraiahotel.com.br;Alimentos e Bebidas
+oelton.goncalves@carmelhoteis.com.br;Controle
+operacional.aeb@carmelcumbuco.com.br;Alimentos e Bebidas
+operacional.aeb@carmeltaiba.com.br;Alimentos e Bebidas
+operacional@carmelcharme.com.br;Gerencia
+operacional@carmelcumbuco.com.br;Gerencia
+operacional@carmeltaiba.com.br;Gerencia
+pagamentos@carmelhoteis.com.br;Financeiro
+patrimonio@carmelhoteis.com.br;Contabilidade
+pcm@carmelhoteis.com.br;Manutencao
+posvenda@carmelhoteis.com.br;Comercial e Reservas
+processos@carmelhoteis.com.br;Qualidade
+qualidade@carmelcumbuco.com.br;Qualidade
+qualidade@magnapraiahotel.com.br;Qualidade
+ramon.sousa@carmelhoteis.com.br;Suprimentos
+rayana.freitas@carmelhoteis.com.br;
+rayra.wysla@carmelhoteis.com.br;Departamento Pessoal
+recebimentofiscal@carmelhoteis.com.br;Fiscal
+recepcao@carmelcharme.com.br;Recepcao
+recepcao@carmelcumbuco.com.br;Recepcao
+recepcao@carmeltaiba.com.br;Recepcao
+recepcao@magnapraiahotel.com.br;Recepcao
+recepcao2@magnapraiahotel.com.br;Recepcao
+regis.queiroz@carmelhoteis.com.br;Comercial e Reservas
+relacionamento@magnapraiahotel.com.br;Recepcao
+reservas@carmelcharme.com.br;Comercial e Reservas
+reservas@carmelcumbuco.com.br;Comercial e Reservas
+reservas@carmelhoteis.com.br;Comercial e Reservas
+reservas@carmeltaiba.com.br;Comercial e Reservas
+reservas@magnapraiahotel.com.br;Comercial e Reservas
+reservas1@carmelcharme.com.br;Comercial e Reservas
+reservas1@carmelcumbuco.com.br;Comercial e Reservas
+reservas1@carmelhoteis.com.br;Comercial e Reservas
+reservas1@carmeltaiba.com.br;Comercial e Reservas
+reservas1@magnapraiahotel.com.br;Comercial e Reservas
+reservas2@carmelhoteis.com.br;Comercial e Reservas
+reservas3@carmelhoteis.com.br;Comercial e Reservas
+restaurante@carmelcumbuco.com.br;Alimentos e Bebidas
+rh@carmelcharme.com.br;Recursos Humanos
+rh@magnapraiahotel.com.br;Recursos Humanos
+roniery.farias@carmelhoteis.com.br;Comercial e Reservas
+safetec@carmelhoteis.com.br;Suporte
+samia.reis@carmelhoteis.com.br;Departamento Pessoal
+sara.bacelar@carmelhoteis.com.br;Comercial e Reservas
+saynara.cordeiro@carmelhoteis.com.br;Recursos Humanos
+sergio.uchoa@carmelhoteis.com.br;
+silvia.lima@carmelhoteis.com.br;Comercial e Reservas
+spa@carmelcumbuco.com.br;SPA
+spa@carmeltaiba.com.br;SPA
+supervisaoaeb@carmelcumbuco.com.br;Alimentos e Bebidas
+supervisaoaeb@carmeltaiba.com.br;Alimentos e Bebidas
+supervisaogov@carmeltaiba.com.br;Governanca
+suphospitalidade@carmeltaiba.com.br;
+suporte@carmelhoteis.com.br;Tecnologia Informacao
+suporte@carmelhoteis.com.br;Tecnologia Informacao
+tarso@carmelhoteis.com.br;Diretoria
+tiago.abelha@carmelhoteis.com.br;Tecnologia Informacao
+vagas@carmelhoteis.com.br;Recursos Humanos
+vanessa.frota@carmelhoteis.com.br;Qualidade
+victor.sousa@carmelhoteis.com.br;Manutencao
+wesley.silva@carmelhoteis.com.br;
+
+
+
+================================================
+FILE: .env.example
+================================================
+# Environment Variables Template
+# Copy this file to .env and fill in the values
+
+# Flask
+SECRET_KEY=your-secret-key-here
+DATABASE_URL=sqlite:///intranet_carmel.db
+
+# Google OAuth
+GOOGLE_CLIENT_ID=your-google-client-id-here
+GOOGLE_CLIENT_SECRET=your-google-client-secret-here
+
+# Zoho
+ZOHO_ACCOUNTS_URL=https://accounts.zoho.com
+ZOHO_CLIENT_ID=your-zoho-client-id-here
+ZOHO_CLIENT_SECRET=your-zoho-client-secret-here
+
+# Google Sheets
+GOOGLE_SHEETS_CREDENTIALS_PATH=
+GOOGLE_SHEETS_ID=
+GOOGLE_SHEETS_TAB=
+
+# Server
+SERVER_NAME=localhost:5000
+
+
+
+================================================
+FILE: app/__init__.py
+================================================
+from dotenv import load_dotenv
+from flask import Flask
+from config import Config
+
+from .extensions import db, login_manager, oauth
+from .auth import auth_bp
+from .routes import main_bp
+from .admin import admin_bp
+from .models import User
+
+
+def create_app():
+    load_dotenv()
+    app = Flask(__name__)
+    app.config.from_object(Config)
+
+    db.init_app(app)
+    login_manager.init_app(app)
+    oauth.init_app(app)
+
+    @login_manager.user_loader
+    def load_user(user_id):
+        return User.query.get(int(user_id))
+
+    oauth.register(
+        name="google",
+        client_id=app.config["GOOGLE_CLIENT_ID"],
+        client_secret=app.config["GOOGLE_CLIENT_SECRET"],
+        server_metadata_url=app.config["GOOGLE_DISCOVERY_URL"],
+        client_kwargs={"scope": "openid email profile"},
+    )
+
+    zoho_client_id = app.config.get("ZOHO_CLIENT_ID")
+    zoho_client_secret = app.config.get("ZOHO_CLIENT_SECRET")
+    if zoho_client_id and zoho_client_secret:
+        accounts_url = (app.config.get("ZOHO_ACCOUNTS_URL") or "https://accounts.zoho.com").rstrip("/")
+        oauth.register(
+            name="zoho",
+            client_id=zoho_client_id,
+            client_secret=zoho_client_secret,
+            server_metadata_url=f"{accounts_url}/.well-known/openid-configuration",
+            client_kwargs={"scope": "openid email profile"},
+        )
+
+    app.register_blueprint(auth_bp)
+    app.register_blueprint(main_bp)
+    app.register_blueprint(admin_bp)  # ✅ aqui
+
+    with app.app_context():
+        db.create_all()
+
+    return app
+
+
+
+================================================
+FILE: app/admin.py
+================================================
+import os
+
+from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app
+from flask_login import login_required
+from sqlalchemy import case, func
+
+from .extensions import db
+from .models import User, Dashboard, UserDashboard
+from .admin_guard import admin_required
+
+admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
+
+
+# =========================
+# HOME ADMIN (Usuários)
+# =========================
+@admin_bp.route("/")
+@login_required
+@admin_required
+def index():
+    q = request.args.get("q", "").strip()
+
+    # ✅ 1) Admin sempre no topo (0 = admin, 1 = não-admin)
+    admin_order = case(
+        (User.is_admin == True, 0),
+        else_=1
+    )
+
+    # ✅ 2) Quem tem nome (não vazio) vem antes (0 = tem nome, 1 = vazio)
+    has_name_order = case(
+        (
+            func.length(func.trim(func.coalesce(User.name, ""))) > 0,
+            0
+        ),
+        else_=1
+    )
+
+    users_query = User.query
+
+    if q:
+        users_query = users_query.filter(
+            (User.name.ilike(f"%{q}%"))
+            | (User.email.ilike(f"%{q}%"))
+            | (User.sector.ilike(f"%{q}%"))
+        )
+
+    users = users_query.order_by(
+        admin_order.asc(),
+        has_name_order.asc(),
+        User.name.asc(),
+        User.email.asc()
+    ).all()
+
+    return render_template("admin/index.html", users=users, q=q)
+
+
+# ✅ Criar usuário manualmente (ADM)
+@admin_bp.route("/users/new", methods=["POST"])
+@login_required
+@admin_required
+def create_user():
+    email = (request.form.get("email") or "").strip().lower()
+    name = (request.form.get("name") or "").strip()
+    sector = (request.form.get("sector") or "").strip()
+    is_admin = True if request.form.get("is_admin") == "on" else False
+    active = True if request.form.get("active") == "on" else False
+
+    if not email or "@" not in email:
+        flash("Informe um e-mail válido.", "danger")
+        return redirect(url_for("admin.index"))
+
+    allowed_domain = current_app.config.get("ALLOWED_EMAIL_DOMAIN")
+    if allowed_domain and not email.endswith("@" + allowed_domain):
+        flash("E-mail fora do domínio corporativo.", "danger")
+        return redirect(url_for("admin.index"))
+
+    exists = User.query.filter_by(email=email).first()
+    if exists:
+        flash("Este e-mail já está cadastrado.", "warning")
+        return redirect(url_for("admin.index"))
+
+    final_name = name if name else ""
+
+    u = User(
+        email=email,
+        name=final_name,
+        sector=sector if sector else None,
+        is_admin=is_admin,
+        active=active,
+    )
+    db.session.add(u)
+    db.session.commit()
+
+    # conta suporte sempre admin/ativa
+    if u.email.lower() == "suporte@carmelhoteis.com.br":
+        u.is_admin = True
+        u.active = True
+        db.session.commit()
+
+    flash("Usuário cadastrado com sucesso.", "success")
+    return redirect(url_for("admin.index"))
+
+
+# ✅ Atualizar campos editáveis (name, email, sector)
+@admin_bp.route("/users/<int:user_id>/update", methods=["POST"])
+@login_required
+@admin_required
+def update_user(user_id):
+    u = User.query.get_or_404(user_id)
+
+    new_name = (request.form.get("name") or "").strip()
+    new_email = (request.form.get("email") or "").strip().lower()
+    new_sector = (request.form.get("sector") or "").strip()
+
+    if not new_email or "@" not in new_email:
+        flash("E-mail inválido.", "danger")
+        return redirect(url_for("admin.index"))
+
+    allowed_domain = current_app.config.get("ALLOWED_EMAIL_DOMAIN")
+    if allowed_domain and not new_email.endswith("@" + allowed_domain):
+        flash("E-mail fora do domínio corporativo.", "danger")
+        return redirect(url_for("admin.index"))
+
+    if new_email != u.email:
+        exists = User.query.filter(User.email == new_email, User.id != u.id).first()
+        if exists:
+            flash("Já existe outro usuário com esse e-mail.", "danger")
+            return redirect(url_for("admin.index"))
+
+    u.name = new_name  # pode ser ''
+    u.email = new_email
+    u.sector = new_sector if new_sector else None
+
+    # conta suporte sempre admin/ativa
+    if u.email.lower() == "suporte@carmelhoteis.com.br":
+        u.is_admin = True
+        u.active = True
+
+    db.session.commit()
+    flash("Usuário atualizado com sucesso.", "success")
+    return redirect(url_for("admin.index"))
+
+
+@admin_bp.route("/toggle-admin/<int:user_id>", methods=["POST"])
+@login_required
+@admin_required
+def toggle_admin(user_id):
+    u = User.query.get_or_404(user_id)
+
+    if u.email.lower() == "suporte@carmelhoteis.com.br":
+        flash("A conta suporte não pode perder admin.", "warning")
+        return redirect(url_for("admin.index"))
+
+    u.is_admin = not bool(u.is_admin)
+    db.session.commit()
+    flash(f"Admin {'ativado' if u.is_admin else 'desativado'} para {u.email}.", "success")
+    return redirect(url_for("admin.index"))
+
+
+@admin_bp.route("/toggle-active/<int:user_id>", methods=["POST"])
+@login_required
+@admin_required
+def toggle_active(user_id):
+    u = User.query.get_or_404(user_id)
+
+    if u.email.lower() == "suporte@carmelhoteis.com.br":
+        flash("A conta suporte não pode ser inativada.", "warning")
+        return redirect(url_for("admin.index"))
+
+    u.active = not bool(u.active)
+    db.session.commit()
+    flash(f"Usuário {'ativado' if u.active else 'inativado'}: {u.email}.", "success")
+    return redirect(url_for("admin.index"))
+
+
+# ✅ EXCLUIR USUÁRIO
+@admin_bp.route("/users/<int:user_id>/delete", methods=["POST"])
+@login_required
+@admin_required
+def delete_user(user_id):
+    u = User.query.get_or_404(user_id)
+
+    # protege suporte
+    if u.email.lower() == "suporte@carmelhoteis.com.br":
+        flash("A conta suporte não pode ser excluída.", "warning")
+        return redirect(url_for("admin.index"))
+
+    # remove vínculos de permissões
+    UserDashboard.query.filter_by(user_id=u.id).delete()
+
+    db.session.delete(u)
+    db.session.commit()
+
+    flash("Usuário excluído com sucesso.", "success")
+    return redirect(url_for("admin.index"))
+
+
+# =========================
+# PERMISSÕES POR USUÁRIO
+# =========================
+@admin_bp.route("/users/<int:user_id>", methods=["GET", "POST"])
+@login_required
+@admin_required
+def user_permissions(user_id):
+    user = User.query.get_or_404(user_id)
+
+    dashboards = Dashboard.query.order_by(Dashboard.sector.asc(), Dashboard.name.asc()).all()
+    allowed_ids = {ud.dashboard_id for ud in user.dashboards}
+
+    sectors = {}
+    for d in dashboards:
+        sectors.setdefault(d.sector, []).append(d)
+
+    if request.method == "POST":
+        selected = request.form.getlist("dashboards")
+
+        UserDashboard.query.filter_by(user_id=user.id).delete()
+
+        for dash_id in selected:
+            db.session.add(UserDashboard(user_id=user.id, dashboard_id=int(dash_id)))
+
+        db.session.commit()
+        flash("Permissões atualizadas com sucesso.", "success")
+        return redirect(url_for("admin.user_permissions", user_id=user.id))
+
+    return render_template(
+        "admin/user_permissions.html",
+        user=user,
+        sectors=sectors,
+        allowed_ids=allowed_ids
+    )
+
+
+@admin_bp.route("/users/<int:user_id>/grant-sector", methods=["POST"])
+@login_required
+@admin_required
+def grant_sector(user_id):
+    user = User.query.get_or_404(user_id)
+    sector = request.form.get("sector", "").strip()
+
+    if not sector:
+        flash("Setor inválido.", "danger")
+        return redirect(url_for("admin.user_permissions", user_id=user.id))
+
+    dashboards = Dashboard.query.filter_by(sector=sector).all()
+    existing = {ud.dashboard_id for ud in user.dashboards}
+
+    added = 0
+    for d in dashboards:
+        if d.id not in existing:
+            db.session.add(UserDashboard(user_id=user.id, dashboard_id=d.id))
+            added += 1
+
+    db.session.commit()
+    flash(f"Setor {sector} liberado ({added} dashboards adicionados).", "success")
+    return redirect(url_for("admin.user_permissions", user_id=user.id))
+
+
+@admin_bp.route("/users/<int:user_id>/revoke-sector", methods=["POST"])
+@login_required
+@admin_required
+def revoke_sector(user_id):
+    user = User.query.get_or_404(user_id)
+    sector = request.form.get("sector", "").strip()
+
+    if not sector:
+        flash("Setor inválido.", "danger")
+        return redirect(url_for("admin.user_permissions", user_id=user.id))
+
+    dashboards_ids = [d.id for d in Dashboard.query.filter_by(sector=sector).all()]
+    if dashboards_ids:
+        UserDashboard.query.filter(
+            UserDashboard.user_id == user.id,
+            UserDashboard.dashboard_id.in_(dashboards_ids)
+        ).delete(synchronize_session=False)
+        db.session.commit()
+
+    flash(f"Setor {sector} removido.", "success")
+    return redirect(url_for("admin.user_permissions", user_id=user.id))
+
+
+# =========================
+# DASHBOARDS (CRUD)
+# =========================
+@admin_bp.route("/dashboards")
+@login_required
+@admin_required
+def dashboards_index():
+    q = request.args.get("q", "").strip()
+    sector = request.args.get("sector", "").strip()
+
+    query = Dashboard.query
+
+    if sector:
+        query = query.filter(Dashboard.sector == sector)
+
+    if q:
+        query = query.filter(
+            (Dashboard.name.ilike(f"%{q}%")) |
+            (Dashboard.slug.ilike(f"%{q}%")) |
+            (Dashboard.url.ilike(f"%{q}%"))
+        )
+
+    dashboards = query.order_by(Dashboard.sector.asc(), Dashboard.name.asc()).all()
+
+    sectors = [row[0] for row in db.session.query(Dashboard.sector).distinct().order_by(Dashboard.sector.asc()).all()]
+
+    return render_template(
+        "admin/dashboards.html",
+        dashboards=dashboards,
+        sectors=sectors,
+        q=q,
+        sector=sector
+    )
+
+
+@admin_bp.route("/dashboards/new", methods=["GET", "POST"])
+@login_required
+@admin_required
+def dashboards_new():
+    if request.method == "POST":
+        sector = request.form.get("sector", "").strip()
+        name = request.form.get("name", "").strip()
+        slug = request.form.get("slug", "").strip()
+        url = request.form.get("url", "").strip()
+
+        if not sector or not name or not slug or not url:
+            flash("Preencha todos os campos.", "danger")
+            return redirect(url_for("admin.dashboards_new"))
+
+        exists = Dashboard.query.filter_by(slug=slug).first()
+        if exists:
+            flash("Slug já existe. Use outro.", "danger")
+            return redirect(url_for("admin.dashboards_new"))
+
+        d = Dashboard(sector=sector, name=name, slug=slug, url=url)
+        db.session.add(d)
+        db.session.commit()
+
+        flash("Dashboard criado com sucesso.", "success")
+        return redirect(url_for("admin.dashboards_index"))
+
+    return render_template("admin/dashboard_form.html", mode="new", dash=None)
+
+
+@admin_bp.route("/dashboards/<int:dash_id>/edit", methods=["GET", "POST"])
+@login_required
+@admin_required
+def dashboards_edit(dash_id):
+    d = Dashboard.query.get_or_404(dash_id)
+
+    if request.method == "POST":
+        sector = request.form.get("sector", "").strip()
+        name = request.form.get("name", "").strip()
+        slug = request.form.get("slug", "").strip()
+        url = request.form.get("url", "").strip()
+
+        if not sector or not name or not slug or not url:
+            flash("Preencha todos os campos.", "danger")
+            return redirect(url_for("admin.dashboards_edit", dash_id=d.id))
+
+        if slug != d.slug:
+            exists = Dashboard.query.filter_by(slug=slug).first()
+            if exists:
+                flash("Slug já existe. Use outro.", "danger")
+                return redirect(url_for("admin.dashboards_edit", dash_id=d.id))
+
+        d.sector = sector
+        d.name = name
+        d.slug = slug
+        d.url = url
+
+        db.session.commit()
+        flash("Dashboard atualizado com sucesso.", "success")
+        return redirect(url_for("admin.dashboards_index"))
+
+    return render_template("admin/dashboard_form.html", mode="edit", dash=d)
+
+
+@admin_bp.route("/dashboards/<int:dash_id>/delete", methods=["POST"])
+@login_required
+@admin_required
+def dashboards_delete(dash_id):
+    d = Dashboard.query.get_or_404(dash_id)
+
+    UserDashboard.query.filter_by(dashboard_id=d.id).delete()
+    db.session.delete(d)
+    db.session.commit()
+
+    flash("Dashboard removido com sucesso.", "success")
+    return redirect(url_for("admin.dashboards_index"))
+
+
+@admin_bp.route("/dashboards/import", methods=["GET", "POST"])
+@login_required
+@admin_required
+def dashboards_import():
+    if request.method == "POST":
+        action = (request.form.get("action") or "manual").strip().lower()
+        mode = (request.form.get("mode") or "sync").strip().lower()
+        remove_missing = request.form.get("remove_missing") == "on"
+
+        def parse_rows(rows):
+            data = {}
+            errors = 0
+            duplicates = 0
+            for row in rows:
+                if not row:
+                    continue
+                values = [str(v).strip() for v in row]
+                if len(values) < 4:
+                    errors += 1
+                    continue
+                sector, name, slug, url = values[0], values[1], values[2], values[3]
+                if not (sector and name and slug and url):
+                    errors += 1
+                    continue
+                if slug in data:
+                    duplicates += 1
+                data[slug] = {
+                    "sector": sector,
+                    "name": name,
+                    "slug": slug,
+                    "url": url,
+                }
+            return data, errors, duplicates
+
+        def fetch_sheet_rows():
+            creds_path = current_app.config.get("GOOGLE_SHEETS_CREDENTIALS_PATH")
+            sheet_id = current_app.config.get("GOOGLE_SHEETS_ID")
+            sheet_tab = current_app.config.get("GOOGLE_SHEETS_TAB")
+
+            if not creds_path or not sheet_id or not sheet_tab:
+                raise ValueError("Configuração do Google Sheets incompleta.")
+            if not os.path.exists(creds_path):
+                raise ValueError("Arquivo de credenciais não encontrado.")
+
+            from google.oauth2 import service_account
+            from googleapiclient.discovery import build
+
+            creds = service_account.Credentials.from_service_account_file(
+                creds_path,
+                scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
+            )
+            service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+            result = service.spreadsheets().values().get(
+                spreadsheetId=sheet_id,
+                range=sheet_tab,
+            ).execute()
+            return result.get("values", [])
+
+        created = 0
+        updated = 0
+        removed = 0
+        errors = 0
+        duplicates = 0
+        data_by_slug = {}
+
+        if action == "sheet":
+            try:
+                rows = fetch_sheet_rows()
+            except Exception as exc:
+                flash(f"Erro ao ler a planilha: {exc}", "danger")
+                return redirect(url_for("admin.dashboards_import"))
+
+            if rows:
+                header = [str(v).strip().lower() for v in rows[0][:4]]
+                if header == ["setor", "nome", "slug", "url"]:
+                    rows = rows[1:]
+            data_by_slug, errors, duplicates = parse_rows(rows)
+        else:
+            raw = request.form.get("bulk", "").strip()
+            if not raw:
+                flash("Cole pelo menos 1 linha.", "danger")
+                return redirect(url_for("admin.dashboards_import"))
+
+            lines = [l.strip() for l in raw.splitlines() if l.strip()]
+            rows = []
+            for line in lines:
+                if "|" in line:
+                    parts = [p.strip() for p in line.split("|")]
+                elif ";" in line:
+                    parts = [p.strip() for p in line.split(";")]
+                else:
+                    parts = [p.strip() for p in line.split("\t")]
+                rows.append(parts)
+
+            if rows:
+                header = [str(v).strip().lower() for v in rows[0][:4]]
+                if header == ["setor", "nome", "slug", "url"]:
+                    rows = rows[1:]
+            data_by_slug, errors, duplicates = parse_rows(rows)
+
+        if not data_by_slug:
+            flash("Nenhuma linha válida encontrada.", "danger")
+            return redirect(url_for("admin.dashboards_import"))
+
+        if mode == "replace":
+            removed = Dashboard.query.count()
+            UserDashboard.query.delete(synchronize_session=False)
+            Dashboard.query.delete(synchronize_session=False)
+            for data in data_by_slug.values():
+                db.session.add(Dashboard(**data))
+                created += 1
+        else:
+            slugs = list(data_by_slug.keys())
+            existing = {
+                d.slug: d
+                for d in Dashboard.query.filter(Dashboard.slug.in_(slugs)).all()
+            }
+
+            for slug, data in data_by_slug.items():
+                if slug in existing:
+                    d = existing[slug]
+                    d.sector = data["sector"]
+                    d.name = data["name"]
+                    d.url = data["url"]
+                    updated += 1
+                else:
+                    db.session.add(Dashboard(**data))
+                    created += 1
+
+            if remove_missing:
+                to_delete = Dashboard.query.filter(~Dashboard.slug.in_(slugs)).all()
+                removed = len(to_delete)
+                if removed:
+                    del_ids = [d.id for d in to_delete]
+                    UserDashboard.query.filter(
+                        UserDashboard.dashboard_id.in_(del_ids)
+                    ).delete(synchronize_session=False)
+                    for d in to_delete:
+                        db.session.delete(d)
+
+        db.session.commit()
+        flash(
+            "Importação finalizada. "
+            f"Criados {created}, Atualizados {updated}, Removidos {removed}, "
+            f"Inválidas {errors}, Duplicadas {duplicates}.",
+            "success"
+        )
+        return redirect(url_for("admin.dashboards_index"))
+
+    return render_template("admin/dashboard_import.html")
+
+
+
+================================================
+FILE: app/admin_guard.py
+================================================
+from functools import wraps
+from flask import abort
+from flask_login import current_user
+
+
+def admin_required(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        if not current_user.is_authenticated:
+            abort(401)
+
+        if not getattr(current_user, "is_admin", False):
+            abort(403)
+
+        return func(*args, **kwargs)
+    return wrapper
+
+
+
+================================================
+FILE: app/auth.py
+================================================
+from flask import Blueprint, redirect, url_for, render_template, flash, current_app
+from flask_login import login_user, logout_user, login_required
+from .extensions import oauth, db
+from .models import User
+
+auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
+
+
+@auth_bp.route("/login")
+def login():
+    return render_template("login.html")
+
+
+@auth_bp.route("/login/google")
+def login_google():
+    redirect_uri = url_for("auth.authorize", _external=True)
+    return oauth.google.authorize_redirect(
+        redirect_uri,
+        prompt="select_account"
+    )
+
+
+@auth_bp.route("/login/zoho")
+def login_zoho():
+    client = getattr(oauth, "zoho", None)
+    if not client:
+        flash("Login Zoho nÃ£o configurado. Solicite ao TI.", "danger")
+        return redirect(url_for("auth.login"))
+
+    redirect_uri = url_for("auth.authorize_zoho", _external=True)
+    return client.authorize_redirect(redirect_uri)
+
+
+@auth_bp.route("/authorize")
+def authorize():
+    oauth.google.authorize_access_token()
+
+    user_info = oauth.google.userinfo()
+    email = (user_info.get("email") or "").strip().lower()
+    name_from_google = (user_info.get("name") or "").strip()
+
+    if not email:
+        flash("Não foi possível obter o e-mail do Google.", "danger")
+        return redirect(url_for("auth.login"))
+
+    # ✅ Restringe por lista de domínios
+    allowed_domains = current_app.config.get("ALLOWED_EMAIL_DOMAINS", [])
+    if allowed_domains:
+        email_domain = email.split("@")[-1].lower()
+        if email_domain not in [d.lower() for d in allowed_domains]:
+            flash("Acesso restrito a e-mails corporativos autorizados.", "danger")
+            return redirect(url_for("auth.login"))
+
+    # ✅ REGRA: usuário precisa existir e estar ativo (cadastrado pelo ADM)
+    user = User.query.filter_by(email=email).first()
+
+    if not user:
+        flash("Seu usuário ainda não foi cadastrado pelo administrador. Solicite liberação ao TI.", "danger")
+        return redirect(url_for("auth.login"))
+
+    if not user.active:
+        flash("Seu usuário está inativo. Solicite liberação ao TI.", "danger")
+        return redirect(url_for("auth.login"))
+
+    # Atualiza nome automaticamente apenas se estiver vazio (opcional)
+    if (not user.name) and name_from_google:
+        user.name = name_from_google
+        db.session.commit()
+
+    # Regra: conta suporte sempre admin
+    if email == "suporte@carmelhoteis.com.br":
+        if not user.is_admin:
+            user.is_admin = True
+            db.session.commit()
+
+    login_user(user)
+    return redirect(url_for("main.area_bi"))
+
+
+@auth_bp.route("/zoho/callback")
+def authorize_zoho():
+    client = getattr(oauth, "zoho", None)
+    if not client:
+        flash("Login Zoho nÃ£o configurado. Solicite ao TI.", "danger")
+        return redirect(url_for("auth.login"))
+
+    token = client.authorize_access_token()
+
+    user_info = {}
+    try:
+        user_info = client.parse_id_token(token)
+    except Exception:
+        try:
+            user_info = client.userinfo()
+        except Exception:
+            user_info = {}
+
+    email = (user_info.get("email") or "").strip().lower()
+    name_from_zoho = (
+        (user_info.get("name") or "")
+        or (user_info.get("full_name") or "")
+        or (user_info.get("display_name") or "")
+    ).strip()
+
+    if not email:
+        flash("NÃ£o foi possÃ­vel obter o e-mail do Zoho.", "danger")
+        return redirect(url_for("auth.login"))
+
+    allowed_domains = current_app.config.get("ALLOWED_EMAIL_DOMAINS", [])
+    if allowed_domains:
+        email_domain = email.split("@")[-1].lower()
+        if email_domain not in [d.lower() for d in allowed_domains]:
+            flash("Acesso restrito a e-mails corporativos autorizados.", "danger")
+            return redirect(url_for("auth.login"))
+
+    user = User.query.filter_by(email=email).first()
+
+    if not user:
+        flash("Seu usuÃ¡rio ainda nÃ£o foi cadastrado pelo administrador. Solicite liberaÃ§Ã£o ao TI.", "danger")
+        return redirect(url_for("auth.login"))
+
+    if not user.active:
+        flash("Seu usuÃ¡rio estÃ¡ inativo. Solicite liberaÃ§Ã£o ao TI.", "danger")
+        return redirect(url_for("auth.login"))
+
+    if (not user.name) and name_from_zoho:
+        user.name = name_from_zoho
+        db.session.commit()
+
+    if email == "suporte@carmelhoteis.com.br":
+        if not user.is_admin:
+            user.is_admin = True
+            db.session.commit()
+
+    login_user(user)
+    return redirect(url_for("main.area_bi"))
+
+
+@auth_bp.route("/logout")
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for("auth.login"))
+
+
+
+================================================
+FILE: app/extensions.py
+================================================
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager
+from authlib.integrations.flask_client import OAuth
+
+db = SQLAlchemy()
+login_manager = LoginManager()
+login_manager.login_view = "auth.login"
+oauth = OAuth()
+
+
+
+================================================
+FILE: app/models.py
+================================================
+from flask_login import UserMixin
+from .extensions import db
+
+
+class User(UserMixin, db.Model):
+    __tablename__ = "user"
+
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    name = db.Column(db.String(120), nullable=False)
+    active = db.Column(db.Boolean, default=True)
+
+    # Admin
+    is_admin = db.Column(db.Boolean, default=False, nullable=False)
+
+    # ✅ NOVO: Setor do usuário (OPCIONAL)
+    sector = db.Column(db.String(120), nullable=True)
+
+    dashboards = db.relationship("UserDashboard", back_populates="user")
+
+
+class Dashboard(db.Model):
+    __tablename__ = "dashboard"
+
+    id = db.Column(db.Integer, primary_key=True)
+    sector = db.Column(db.String(50), nullable=False)
+    name = db.Column(db.String(120), nullable=False)
+    slug = db.Column(db.String(120), unique=True, nullable=False)
+    url = db.Column(db.String(500), nullable=False)
+
+    users = db.relationship("UserDashboard", back_populates="dashboard")
+
+
+class UserDashboard(db.Model):
+    __tablename__ = "user_dashboard"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"))
+    dashboard_id = db.Column(db.Integer, db.ForeignKey("dashboard.id"))
+
+    user = db.relationship("User", back_populates="dashboards")
+    dashboard = db.relationship("Dashboard", back_populates="users")
+
+
+
+================================================
+FILE: app/routes.py
+================================================
+from flask import Blueprint, render_template, redirect, url_for, abort
+from flask_login import login_required, current_user
+
+from .extensions import db
+from .models import Dashboard, UserDashboard
+
+main_bp = Blueprint("main", __name__)
+
+
+@main_bp.route("/")
+def index():
+    if current_user.is_authenticated:
+        return redirect(url_for("main.area_bi"))
+    return redirect(url_for("auth.login"))
+
+
+@main_bp.route("/bi/")
+@login_required
+def area_bi():
+    setores = agrupa_dashboards_por_usuario(current_user.id)
+    return render_template("area_bi.html", setores=setores)
+
+
+@main_bp.route("/bi/<sector>/<slug>/")
+@login_required
+def dashboard_embed(sector, slug):
+    dash = Dashboard.query.filter_by(
+        sector=sector.upper(),
+        slug=slug
+    ).first()
+
+    if not dash:
+        abort(404)
+
+    # (Opcional) se você quiser bloquear acesso ao embed caso não tenha permissão:
+    # allowed = UserDashboard.query.filter_by(user_id=current_user.id, dashboard_id=dash.id).first()
+    # if not allowed and not getattr(current_user, "is_admin", False):
+    #     abort(403)
+
+    return render_template("dashboard_embed.html", dashboard=dash)
+
+
+def agrupa_dashboards_por_usuario(user_id: int):
+    """
+    Retorna somente os dashboards liberados para o usuário (via user_dashboard).
+    Se o usuário for admin, retorna todos.
+    """
+    # Admin vê tudo
+    if getattr(current_user, "is_admin", False):
+        dashboards = Dashboard.query.order_by(Dashboard.sector, Dashboard.name).all()
+    else:
+        dashboards = (
+            db.session.query(Dashboard)
+            .join(UserDashboard, UserDashboard.dashboard_id == Dashboard.id)
+            .filter(UserDashboard.user_id == user_id)
+            .order_by(Dashboard.sector, Dashboard.name)
+            .all()
+        )
+
+    setores = {}
+    for d in dashboards:
+        setores.setdefault(d.sector, []).append(d)
+    return setores
+
+
+
+================================================
+FILE: app/static/css/style.css
+================================================
+/* ============================
+   Paleta Carmel
+   ============================ */
+:root {
+  --carmel-marrom-escuro: #4C3427;
+  --carmel-marrom:        #9F9385;
+  --carmel-bege:          #DBD4CA;
+  --carmel-offwhite:      #E8E7E1;
+  --carmel-bege-claro:    #E7D0A7;
+  --carmel-preto:         #1D1D1B;
+
+  --carmel-marrom-escuro-rgb: 76, 52, 39;
+  --carmel-marrom-rgb:        159, 147, 133;
+  --carmel-bege-rgb:          219, 212, 202;
+  --carmel-offwhite-rgb:      232, 231, 225;
+  --carmel-bege-claro-rgb:    231, 208, 167;
+  --carmel-preto-rgb:         29, 29, 27;
+
+  --surface:              rgba(var(--carmel-marrom-escuro-rgb), 0.78);
+  --surface-strong:       rgba(var(--carmel-marrom-escuro-rgb), 0.92);
+  --border-soft:          rgba(var(--carmel-bege-rgb), 0.35);
+  --border-strong:        rgba(var(--carmel-marrom-rgb), 0.5);
+  --shadow-soft:          0 18px 40px rgba(0, 0, 0, 0.35);
+  --shadow-strong:        0 26px 60px rgba(0, 0, 0, 0.55);
+  --radius-lg:            16px;
+  --radius-md:            12px;
+  --radius-sm:            10px;
+}
+
+/* Reseta base */
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  background: transparent !important;
+  color: var(--carmel-offwhite);
+  letter-spacing: 0.01em;
+}
+
+h1, h2, h3, h4, h5, h6,
+.brand-text {
+  font-family: "Playfair Display", "Times New Roman", serif;
+  letter-spacing: 0.02em;
+}
+
+p {
+  color: rgba(232, 231, 225, 0.92);
+}
+
+/* ============================
+   Fundo em vídeo (CRÍTICO)
+   ============================ */
+.video-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  overflow: hidden;
+}
+
+.video-bg video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: brightness(0.6);
+}
+
+.video-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(1200px 600px at 15% 0%, rgba(var(--carmel-bege-claro-rgb), 0.22), transparent 60%),
+    linear-gradient(180deg, rgba(var(--carmel-preto-rgb), 0.45) 0%, rgba(var(--carmel-preto-rgb), 0.75) 100%);
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* overlay opcional (você tinha desligado) */
+.page-overlay {
+  display: none !important;
+}
+
+/* ============================
+   Navbar – compacta
+   ============================ */
+.compact-nav {
+  background: rgba(var(--carmel-preto-rgb), 0.92);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 2px 18px rgba(0, 0, 0, 0.75);
+
+  padding-top: 4px !important;
+  padding-bottom: 4px !important;
+  min-height: 44px;
+}
+
+.navbar-logo {
+  height: 26px;
+  width: auto;
+}
+
+.brand-text {
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--carmel-offwhite);
+  font-size: 0.95rem;
+}
+
+.user-name {
+  font-size: 0.9rem;
+  color: var(--carmel-bege-claro);
+}
+
+.compact-nav .btn-outline-light {
+  border-color: var(--carmel-offwhite);
+  color: var(--carmel-offwhite);
+}
+
+.compact-nav .btn-outline-light:hover {
+  background-color: var(--carmel-bege-claro);
+  color: var(--carmel-preto);
+}
+
+/* ============================
+   Conteúdo principal
+   ============================ */
+.main-content {
+  margin-top: 0.75rem;
+  margin-bottom: 1.5rem;
+  padding: 0 24px 12px;
+  background: transparent !important;
+}
+
+.main-content h1 {
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+  color: var(--carmel-offwhite) !important;
+}
+
+.main-content .info-text {
+  font-size: 0.95rem;
+  color: var(--carmel-offwhite) !important;
+}
+
+/* ============================
+   Componentes base
+   ============================ */
+.btn {
+  border-radius: 999px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.btn-primary,
+.card .btn-primary {
+  background-color: var(--carmel-bege-claro);
+  border-color: var(--carmel-bege-claro);
+  color: var(--carmel-preto);
+  box-shadow: 0 10px 22px rgba(var(--carmel-bege-claro-rgb), 0.25);
+}
+
+.btn-primary:hover,
+.card .btn-primary:hover {
+  background-color: var(--carmel-bege);
+  border-color: var(--carmel-bege);
+  color: var(--carmel-preto);
+}
+
+.btn-outline-light {
+  border-color: rgba(var(--carmel-offwhite-rgb), 0.6);
+  color: var(--carmel-offwhite);
+}
+
+.btn-outline-light:hover {
+  background-color: rgba(var(--carmel-bege-claro-rgb), 0.2);
+  color: var(--carmel-offwhite);
+}
+
+.btn-outline-secondary {
+  border-color: rgba(var(--carmel-marrom-rgb), 0.6);
+  color: var(--carmel-offwhite);
+}
+
+.btn-outline-secondary:hover {
+  background-color: rgba(var(--carmel-marrom-rgb), 0.2);
+  color: var(--carmel-offwhite);
+}
+
+.btn-outline-danger {
+  border-color: rgba(255, 120, 120, 0.6);
+  color: #ffd0d0;
+}
+
+.btn-outline-danger:hover {
+  background-color: rgba(255, 120, 120, 0.2);
+  color: #ffe5e5;
+}
+
+.form-control,
+.form-select,
+textarea.form-control {
+  background: rgba(var(--carmel-preto-rgb), 0.28);
+  border: 1px solid rgba(var(--carmel-bege-rgb), 0.18);
+  color: var(--carmel-offwhite);
+  border-radius: var(--radius-sm);
+}
+
+.form-control:focus,
+.form-select:focus,
+textarea.form-control:focus {
+  border-color: rgba(var(--carmel-bege-claro-rgb), 0.8);
+  box-shadow: 0 0 0 0.15rem rgba(var(--carmel-bege-claro-rgb), 0.35);
+  background: rgba(var(--carmel-preto-rgb), 0.35);
+  color: var(--carmel-offwhite);
+}
+
+.form-label {
+  color: rgba(232, 231, 225, 0.9);
+  font-weight: 600;
+}
+
+.card {
+  background-color: var(--surface-strong);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  color: var(--carmel-offwhite);
+  box-shadow: var(--shadow-soft);
+}
+
+.table {
+  color: var(--carmel-offwhite);
+}
+
+.table-dark {
+  --bs-table-bg: transparent;
+  --bs-table-striped-bg: rgba(var(--carmel-offwhite-rgb), 0.04);
+  --bs-table-hover-bg: rgba(var(--carmel-bege-claro-rgb), 0.08);
+  --bs-table-border-color: rgba(var(--carmel-offwhite-rgb), 0.08);
+  color: var(--carmel-offwhite);
+}
+
+.table > :not(caption) > * > * {
+  border-color: rgba(var(--carmel-offwhite-rgb), 0.08);
+}
+
+.badge.bg-secondary {
+  background-color: rgba(var(--carmel-marrom-rgb), 0.35) !important;
+  border: 1px solid rgba(var(--carmel-marrom-rgb), 0.5);
+  color: var(--carmel-offwhite);
+}
+
+/* ============================
+   Accordion de setores (Área de BI)
+   ============================ */
+.accordion-item {
+  background-color: rgba(var(--carmel-bege-rgb), 0.35) !important;
+  border: 1px solid rgba(var(--carmel-bege-rgb), 0.5) !important;
+  border-radius: var(--radius-lg) !important;
+  overflow: hidden;
+  backdrop-filter: blur(4px);
+}
+
+.accordion-button {
+  background-color: rgba(var(--carmel-bege-rgb), 0.45) !important;
+  color: var(--carmel-preto) !important;
+  font-weight: 600;
+}
+
+.accordion-button:not(.collapsed) {
+  color: var(--carmel-preto) !important;
+  background-color: rgba(var(--carmel-bege-rgb), 0.6) !important;
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+}
+
+.accordion-button:focus {
+  box-shadow: 0 0 0 0.15rem rgba(var(--carmel-bege-claro-rgb), 0.6);
+}
+
+.accordion-body {
+  background-color: rgba(var(--carmel-bege-rgb), 0.25) !important;
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  padding-top: 1rem;
+  padding-bottom: 1rem;
+}
+
+/* Cards dos dashboards */
+.card h5 {
+  color: var(--carmel-bege-claro);
+  font-weight: 500;
+}
+
+.alert-info {
+  background-color: rgba(var(--carmel-marrom-rgb), 0.15);
+  border-color: rgba(var(--carmel-bege-rgb), 0.6);
+  color: var(--carmel-offwhite);
+}
+
+/* responsivo */
+@media (max-width: 768px) {
+  .navbar-logo { height: 22px; }
+  .main-content { padding-top: 0.75rem; padding-left: 16px; padding-right: 16px; }
+}
+
+/* ============================
+   Área de BI centralizada
+   ============================ */
+.bi-content {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+/* ============================
+   Página de embed do dashboard
+   ============================ */
+.embed-page {
+  width: 100%;
+  padding-left: 1.5rem;
+  padding-right: 1.5rem;
+}
+
+.embed-header {
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+}
+
+.small-header {
+  margin-top: 0.1rem !important;
+  margin-bottom: 0.3rem !important;
+}
+
+.embed-breadcrumb {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--carmel-marrom);
+}
+
+.embed-title {
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--carmel-offwhite);
+}
+
+.embed-wrapper {
+  width: 100%;
+  height: calc(100vh - 90px);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-strong);
+}
+
+.embed-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+.embed-page .card,
+.embed-page .accordion-item,
+.embed-page .accordion-body {
+  background-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* ============================
+   Tela de Login
+   ============================ */
+.login-wrapper {
+  min-height: calc(100vh - 44px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 1vh;
+}
+
+.login-panel {
+  max-width: 520px;
+  width: 100%;
+  padding: 2.5rem 3rem;
+  background-color: rgba(var(--carmel-preto-rgb), 0.9);
+  border-radius: 22px;
+  box-shadow: var(--shadow-strong);
+  backdrop-filter: blur(12px);
+  transform: translateY(-10vh);
+}
+
+.login-logo {
+  height: 40px;
+  width: auto;
+  opacity: 0.95;
+}
+
+.login-title {
+  font-size: 1.9rem;
+  font-weight: 700;
+  color: var(--carmel-offwhite);
+}
+
+.login-description {
+  font-size: 0.95rem;
+  line-height: 1.45;
+  color: rgba(232, 231, 225, 0.9);
+}
+
+.btn-login-google {
+  background-color: var(--carmel-bege-claro);
+  border-color: var(--carmel-bege-claro);
+  color: var(--carmel-preto);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.btn-login-google:hover {
+  background-color: var(--carmel-bege);
+  border-color: var(--carmel-bege);
+  color: var(--carmel-preto);
+}
+
+.btn-login-zoho {
+  background-color: rgba(74, 144, 226, 0.95);
+  border-color: rgba(74, 144, 226, 0.95);
+  color: #fff;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.btn-login-zoho:hover {
+  background-color: rgba(74, 144, 226, 0.8);
+  border-color: rgba(74, 144, 226, 0.8);
+  color: #fff;
+}
+
+@media (max-width: 576px) {
+  .login-panel {
+    padding: 2rem 1.5rem;
+    margin: 0 1rem;
+    transform: translateY(-1vh);
+  }
+  .login-title { font-size: 1.6rem; }
+  .login-description { font-size: 0.9rem; }
+}
+
+/* ============================
+   Permissões (cards)
+   ============================ */
+.perm-item{
+  display:flex;
+  gap:12px;
+  padding:12px;
+  border-radius: var(--radius-md);
+  background: rgba(var(--carmel-marrom-escuro-rgb), 0.55);
+  border: 1px solid rgba(var(--carmel-marrom-rgb), 0.35);
+  cursor:pointer;
+  align-items:flex-start;
+}
+
+.perm-item input{
+  margin-top:4px;
+  transform: scale(1.1);
+}
+
+.perm-text{
+  color: var(--carmel-offwhite);
+}
+
+.perm-text small{
+  color: rgba(232, 231, 225, 0.75) !important;
+}
+
+/* =========================================================
+   ADMIN (ÚNICO BLOCO) – padrão do dashboards
+   ========================================================= */
+
+/* wrapper do admin ocupa largura útil */
+.admin-wrap,
+.admin-page{
+  width: min(1200px, calc(100vw - 32px));
+  margin: 0 auto;
+}
+
+/* NAV TABS (Usuários/Dashboards) */
+.admin-tabs{
+  display:flex;
+  gap:10px;
+  margin: 6px 0 14px;
+}
+
+.admin-tab{
+  display:inline-block;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--carmel-offwhite-rgb), 0.35);
+  color: #fff;
+  text-decoration: none;
+  background: rgba(var(--carmel-preto-rgb), 0.2);
+}
+
+.admin-tab.is-active{
+  border-color: rgba(var(--carmel-bege-claro-rgb), 0.75);
+  background: rgba(var(--carmel-bege-claro-rgb), 0.18);
+}
+
+/* header */
+.admin-head{
+  display:flex;
+  align-items:flex-end;
+  justify-content:space-between;
+  gap:16px;
+  margin: 12px 0 10px;
+}
+
+.admin-actions{
+  display:flex;
+  gap:10px;
+  align-items:flex-end;
+  flex-wrap: wrap;
+}
+
+.admin-h1{
+  margin:0;
+  font-size: 2.1rem;
+  line-height: 1.05;
+}
+
+.admin-p{
+  margin:6px 0 0;
+  opacity:.9;
+}
+
+/* busca */
+.admin-search{
+  display:flex;
+  gap:10px;
+  width: 560px;
+  max-width: 100%;
+}
+
+.admin-input{
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(var(--carmel-bege-rgb), 0.18);
+  background: rgba(var(--carmel-preto-rgb), 0.25);
+  color:#fff;
+  outline:none;
+}
+
+/* card */
+.admin-card{
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-strong);
+  padding: 16px;
+  margin-bottom: 14px;
+  box-shadow: var(--shadow-soft);
+}
+
+.admin-h3{ margin:0 0 12px; }
+
+/* form de cadastro */
+.admin-form{
+  display:flex;
+  flex-wrap:wrap;
+  gap:12px;
+  align-items:flex-end;
+}
+
+.admin-field{
+  flex: 1;
+  min-width: 240px;
+}
+
+.admin-label{
+  display:block;
+  margin-bottom:6px;
+  opacity:.9;
+}
+
+.admin-input-sm{
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(var(--carmel-bege-rgb), 0.18);
+  background: rgba(var(--carmel-preto-rgb), 0.25);
+  color:#fff;
+  outline:none;
+  font-size: 12px;
+}
+
+.admin-checks{
+  display:flex;
+  gap:14px;
+  align-items:center;
+  white-space:nowrap;
+}
+
+.admin-check{
+  display:flex;
+  gap:8px;
+  align-items:center;
+  opacity:.95;
+}
+
+/* botões */
+.admin-btn{
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--carmel-bege-rgb), 0.18);
+  background: rgba(var(--carmel-preto-rgb), 0.35);
+  color:#fff;
+  cursor:pointer;
+  white-space:nowrap;
+}
+
+.admin-btn:hover{ background: rgba(var(--carmel-preto-rgb), 0.45); }
+
+.admin-btn-sm{
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.admin-btn-ok{
+  border-color: rgba(0,200,120,.45);
+  background: rgba(0,200,120,.18);
+  color:#bfffe4;
+}
+
+.admin-btn-warn{
+  border-color: rgba(255,200,0,.55);
+  color:#ffd24a;
+  background: rgba(0,0,0,.20);
+}
+
+.admin-btn-danger{
+  border-color: rgba(255,80,80,.55);
+  color: #ffb3b3;
+  background: rgba(0,0,0,.20);
+}
+
+/* pills */
+.pill{
+  display:inline-block;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.15);
+  background: rgba(200,200,200,.10);
+  font-size: 11px;
+}
+
+.pill-ok{ background: rgba(0,200,120,.25); border-color: rgba(0,200,120,.45); }
+.pill-no{ background: rgba(255,80,80,.20); border-color: rgba(255,80,80,.45); }
+.pill-neu{ background: rgba(200,200,200,.12); border-color: rgba(255,255,255,.15); }
+
+/* tabela: sem barra horizontal, sticky no cabeçalho e tudo compacto */
+.admin-table-box{
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-strong);
+  box-shadow: var(--shadow-soft);
+
+  overflow-y: auto;
+  overflow-x: hidden;            /* remove barra horizontal */
+  max-height: calc(100vh - 320px);
+}
+
+.admin-table{
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;           /* ESSENCIAL pra caber */
+}
+
+.admin-table th,
+.admin-table td{
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.2;
+  border-bottom: 1px solid rgba(var(--carmel-offwhite-rgb), 0.08);
+  vertical-align: middle;
+}
+
+.admin-table thead th{
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: rgba(var(--carmel-preto-rgb), 0.92);
+  backdrop-filter: blur(6px);
+}
+
+/* utilitários */
+.t-center{ text-align:center; }
+.t-right{ text-align:right; }
+.row-form{ display: contents; }
+.inline{ display:inline; }
+
+/* quebra texto (pra caber email/setor) */
+.admin-table td{
+  word-break: break-word;
+  white-space: normal;
+}
+
+/* ações: coluna vertical pra não “estourar” */
+.actions-col{
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+/* responsivo */
+@media (max-width: 1100px){
+  .admin-head{ flex-direction: column; align-items: flex-start; }
+  .admin-search{ width: 100%; }
+}
+
+
+
+================================================
+FILE: app/templates/area_bi.html
+================================================
+{% extends "base.html" %}
+{% block title %}Área de BI{% endblock %}
+{% block content %}
+
+<div class="bi-content">
+  <h1>Área de BI</h1>
+
+  {% if current_user.is_authenticated %}
+    <p class="info-text mb-4">
+      Logado como {{ current_user.name }}
+    </p>
+  {% endif %}
+
+  {% if not setores %}
+    <div class="alert alert-info">
+      Nenhum dashboard cadastrado ainda. Depois vamos popular a tabela <code>dashboard</code> no banco.
+    </div>
+  {% else %}
+
+    <div class="accordion" id="accSetores">
+      {% for setor, dashboards in setores.items() %}
+        {% set sid = 'setor-' ~ loop.index %}
+
+        <div class="accordion-item mb-2">
+          <h2 class="accordion-header" id="h-{{ sid }}">
+            <button
+              type="button"
+              class="accordion-button collapsed"
+              data-bs-toggle="collapse"
+              data-bs-target="#c-{{ sid }}"
+              aria-expanded="false"
+              aria-controls="c-{{ sid }}"
+            >
+              {{ setor }}
+            </button>
+          </h2>
+
+          <div
+            id="c-{{ sid }}"
+            class="accordion-collapse collapse"
+            aria-labelledby="h-{{ sid }}"
+            data-bs-parent="#accSetores"
+          >
+            <div class="accordion-body">
+              <div class="row g-3">
+                {% for d in dashboards %}
+                  <div class="col-12 col-md-6 col-lg-4">
+                    <div class="card p-3">
+                      <h5 class="mb-2">{{ d.name }}</h5>
+                      <a class="btn btn-primary btn-sm"
+                         href="{{ url_for('main.dashboard_embed', sector=d.sector, slug=d.slug) }}">
+                        Abrir
+                      </a>
+                    </div>
+                  </div>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+        </div>
+
+      {% endfor %}
+    </div>
+
+  {% endif %}
+</div>
+
+{% endblock %}
+
+
+
+================================================
+FILE: app/templates/base.html
+================================================
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>{% block title %}Intranet Carmel{% endblock %}</title>
+
+  <!-- Bootstrap CSS -->
+  <link
+    rel="stylesheet"
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
+  >
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&family=Source+Sans+3:wght@300;400;500;600;700&display=swap"
+    rel="stylesheet"
+  >
+
+  <!-- CSS do projeto -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+  <!-- Vídeo de fundo -->
+  <div class="video-bg">
+    <video autoplay muted loop playsinline>
+      <source src="{{ url_for('static', filename='video/carmel-bg.mp4') }}" type="video/mp4">
+    </video>
+  </div>
+
+  <!-- Navbar -->
+  <nav class="navbar navbar-dark navbar-expand-lg compact-nav">
+    <div class="container-fluid">
+
+      <a class="navbar-brand d-flex align-items-center" href="{{ url_for('main.area_bi') }}">
+        <img
+          src="{{ url_for('static', filename='img/logo-carmel.png') }}"
+          class="navbar-logo me-2"
+          alt="Carmel"
+        >
+        <span class="brand-text">Intranet Carmel</span>
+      </a>
+
+      <div class="d-flex align-items-center ms-auto gap-2">
+        {% if current_user.is_authenticated %}
+
+          {% if current_user.is_admin %}
+            <a href="{{ url_for('admin.index') }}" class="btn btn-outline-light btn-sm">
+              Administração
+            </a>
+          {% endif %}
+
+          <span class="me-2 user-name">
+            {{ current_user.name }}
+          </span>
+
+          <a href="{{ url_for('auth.logout') }}" class="btn btn-outline-light btn-sm">
+            Sair
+          </a>
+        {% endif %}
+      </div>
+
+    </div>
+  </nav>
+
+  <!-- Conteúdo -->
+  <main class="main-content">
+    {% block content %}{% endblock %}
+  </main>
+
+  <!-- ✅ Bootstrap JS (ESSENCIAL para accordion funcionar) -->
+  <script
+    src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js">
+  </script>
+
+</body>
+</html>
+
+
+
+================================================
+FILE: app/templates/dashboard_embed.html
+================================================
+{% extends "base.html" %}
+{% block title %}{{ dashboard.name }} - Intranet Carmel{% endblock %}
+
+{% block content %}
+<div class="embed-page">
+
+  <div class="embed-header d-flex justify-content-between align-items-center mb-2">
+    <div>
+      <div class="embed-breadcrumb">
+        Área de BI / {{ dashboard.sector }}
+      </div>
+      <h3 class="embed-title mb-0">
+        {{ dashboard.name }}
+      </h3>
+    </div>
+
+    <a href="{{ url_for('main.area_bi') }}" class="btn btn-outline-light btn-sm">
+      Voltar
+    </a>
+  </div>
+
+  <div class="embed-wrapper">
+    <iframe
+      src="{{ dashboard.url }}"
+      frameborder="0"
+      allowfullscreen="true"
+      class="embed-iframe">
+    </iframe>
+  </div>
+
+</div>
+{% endblock %}
+
+
+
+================================================
+FILE: app/templates/login.html
+================================================
+{% extends "base.html" %}
+{% block title %}Login - Intranet Carmel{% endblock %}
+
+{% block content %}
+<div class="login-wrapper">
+  <div class="login-panel text-center">
+
+    <!-- Logo Carmel centralizada -->
+    <img
+      src="{{ url_for('static', filename='img/logo-carmel.png') }}"
+      alt="Carmel Hotéis"
+      class="login-logo mb-3"
+    >
+
+    <!-- Título principal -->
+    <h1 class="login-title mb-2">
+      Intranet Carmel
+    </h1>
+
+    <!-- Descrição estratégica -->
+    <p class="login-description mb-4">
+      <strong>Visão estratégica em um só lugar</strong><br>
+      Uma página exclusiva com acesso integrado aos principais relatórios,
+      reunindo informações essenciais para apoio à gestão e ao acompanhamento contínuo.
+    </p>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+         <div class="mb-3 text-start">
+          {% for category, message in messages %}
+           <div class="alert alert-{{ category }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    <!-- Botão Google (AGORA indo pra /auth/login/google) -->
+    <a
+      href="{{ url_for('auth.login_google') }}"
+      class="btn btn-login-google btn-lg w-100"
+    >
+      Entrar com Google
+    </a>
+
+    <a
+      href="{{ url_for('auth.login_zoho') }}"
+      class="btn btn-login-zoho btn-lg w-100 mt-2"
+    >
+      Entrar com Zoho
+    </a>
+
+  </div>
+</div>
+{% endblock %}
+
+
+
+================================================
+FILE: app/templates/admin/_nav.html
+================================================
+<div class="admin-tabs">
+  <a class="admin-tab {% if request.path == '/admin/' or request.path == '/admin' %}is-active{% endif %}"
+     href="{{ url_for('admin.index') }}">
+    Usuários
+  </a>
+
+  <a class="admin-tab {% if request.path.startswith('/admin/dashboards') %}is-active{% endif %}"
+     href="{{ url_for('admin.dashboards_index') }}">
+    Dashboards
+  </a>
+</div>
+
+
+
+================================================
+FILE: app/templates/admin/dashboard_form.html
+================================================
+{% extends "base.html" %}
+{% block title %}Admin - {% if mode == 'new' %}Novo Dashboard{% else %}Editar Dashboard{% endif %}{% endblock %}
+
+{% block content %}
+<div class="bi-content admin-page">
+  <h2 class="mb-2">
+    {% if mode == 'new' %}Novo Dashboard{% else %}Editar Dashboard{% endif %}
+  </h2>
+  <p class="info-text mb-3">Preencha os campos e salve.</p>
+
+  {% include "admin/_nav.html" %}
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <div class="card p-3">
+    <form method="POST" class="row g-3">
+      <div class="col-12 col-md-4">
+        <label class="form-label">Setor</label>
+        <input class="form-control" name="sector" required value="{{ dash.sector if dash else '' }}" placeholder="ex: TI">
+      </div>
+
+      <div class="col-12 col-md-8">
+        <label class="form-label">Nome</label>
+        <input class="form-control" name="name" required value="{{ dash.name if dash else '' }}" placeholder="ex: GLPI - Operacional">
+      </div>
+
+      <div class="col-12 col-md-4">
+        <label class="form-label">Slug (único)</label>
+        <input class="form-control" name="slug" required value="{{ dash.slug if dash else '' }}" placeholder="ex: glpi-operacional">
+        <div class="form-text text-light">sem espaços, use hífen. Ex: gestao-documentos</div>
+      </div>
+
+      <div class="col-12 col-md-8">
+        <label class="form-label">URL</label>
+        <input class="form-control" name="url" required value="{{ dash.url if dash else '' }}" placeholder="https://...">
+      </div>
+
+      <div class="col-12 d-flex gap-2">
+        <button class="btn btn-primary" type="submit">Salvar</button>
+        <a class="btn btn-outline-light" href="{{ url_for('admin.dashboards_index') }}">Voltar</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+
+
+================================================
+FILE: app/templates/admin/dashboard_import.html
+================================================
+﻿{% extends "base.html" %}
+{% block title %}Admin - Importar Dashboards{% endblock %}
+
+{% block content %}
+<div class="bi-content admin-page">
+  <h2 class="mb-2">Importar Dashboards</h2>
+  <p class="info-text mb-3">
+    Cole linhas no formato: <code>SETOR | NOME | SLUG | URL</code><br>
+    Separador pode ser <code>|</code> ou <code>;</code> ou TAB.
+  </p>
+
+  {% include "admin/_nav.html" %}
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <div class="card p-3">
+    <form method="POST">
+      <div class="mb-3">
+        <label class="form-label">Modo de importação</label>
+        <div class="d-flex flex-column gap-2">
+          <label class="perm-item">
+            <input type="radio" name="mode" value="sync" checked>
+            <span class="perm-text">
+              <strong>Atualizar por slug (recomendado)</strong><br>
+              <small class="text-muted">Atualiza existentes, cria novos e opcionalmente remove os que não estão na lista.</small>
+            </span>
+          </label>
+
+          <label class="perm-item">
+            <input type="radio" name="mode" value="replace">
+            <span class="perm-text">
+              <strong>Apagar tudo e recriar</strong><br>
+              <small class="text-muted">Remove todos os dashboards e permissões antes de importar.</small>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="mb-3">
+        <label class="perm-item">
+          <input type="checkbox" name="remove_missing" checked>
+          <span class="perm-text">
+            <strong>Remover dashboards que não estão na lista</strong><br>
+            <small class="text-muted">Mantém apenas os dashboards presentes no arquivo.</small>
+          </span>
+        </label>
+      </div>
+      <label class="form-label">Conteúdo</label>
+      <textarea class="form-control" name="bulk" rows="12" placeholder="QUALIDADE | 5S | 5s | https://..."></textarea>
+
+      <div class="d-flex gap-2 mt-3">
+        <button class="btn btn-primary" type="submit" name="action" value="manual" id="import-submit">Importar</button>
+        <button class="btn btn-outline-light" type="submit" name="action" value="sheet">Sincronizar do Sheets</button>
+        <a class="btn btn-outline-light" href="{{ url_for('admin.dashboards_index') }}">Voltar</a>
+      </div>
+      <div class="form-text text-light mt-2">
+        Sincronizar do Sheets usa a planilha configurada no servidor.
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  (function () {
+    const form = document.querySelector('form');
+    if (!form) return;
+    form.addEventListener('submit', function (event) {
+      const mode = form.querySelector('input[name="mode"]:checked');
+      if (mode && mode.value === 'replace') {
+        const ok = window.confirm(
+          'Tem certeza? Este modo apaga todos os dashboards e permissões antes de importar.'
+        );
+        if (!ok) {
+          event.preventDefault();
+        }
+      }
+    });
+  })();
+</script>
+{% endblock %}
+
+
+
+
+
+================================================
+FILE: app/templates/admin/dashboards.html
+================================================
+{% extends "base.html" %}
+{% block title %}Admin - Dashboards{% endblock %}
+
+{% block content %}
+<div class="bi-content admin-page">
+  <div class="admin-head">
+    <div>
+      <h1 class="admin-h1">Dashboards</h1>
+      <p class="admin-p">Cadastre, edite e remova dashboards e setores.</p>
+    </div>
+
+    <div class="admin-actions">
+      <a class="btn btn-primary btn-sm" href="{{ url_for('admin.dashboards_new') }}">+ Novo dashboard</a>
+      <a class="btn btn-outline-light btn-sm" href="{{ url_for('admin.dashboards_import') }}">Importar em massa</a>
+      <form method="POST" action="{{ url_for('admin.dashboards_import') }}">
+        <input type="hidden" name="action" value="sheet">
+        <input type="hidden" name="mode" value="sync">
+        <input type="hidden" name="remove_missing" value="on">
+        <button class="btn btn-outline-light btn-sm" type="submit">Sincronizar do Sheets</button>
+      </form>
+    </div>
+  </div>
+
+  {% include "admin/_nav.html" %}
+
+  <div class="card p-3 mb-3">
+    <form method="GET" class="row g-2 align-items-end">
+      <div class="col-12 col-md-5">
+        <label class="form-label">Buscar</label>
+        <input class="form-control" name="q" value="{{ q or '' }}" placeholder="nome, slug ou url">
+      </div>
+
+      <div class="col-12 col-md-4">
+        <label class="form-label">Setor</label>
+        <select class="form-select" name="sector">
+          <option value="">Todos</option>
+          {% for s in sectors %}
+            <option value="{{ s }}" {% if sector == s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-12 col-md-3 d-flex gap-2">
+        <button class="btn btn-outline-light w-100" type="submit">Filtrar</button>
+        <a class="btn btn-outline-secondary w-100" href="{{ url_for('admin.dashboards_index') }}">Limpar</a>
+      </div>
+    </form>
+  </div>
+
+  <div class="card p-3">
+    <div class="table-responsive">
+      <table class="table table-dark table-hover align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Setor</th>
+            <th>Nome</th>
+            <th>Slug</th>
+            <th>URL</th>
+            <th class="text-end">Ações</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for d in dashboards %}
+          <tr>
+            <td><span class="badge bg-secondary">{{ d.sector }}</span></td>
+            <td>{{ d.name }}</td>
+            <td><code>{{ d.slug }}</code></td>
+            <td class="text-truncate" style="max-width: 360px;">
+              <a class="link-light" href="{{ d.url }}" target="_blank">{{ d.url }}</a>
+            </td>
+            <td class="text-end d-flex gap-2 justify-content-end">
+              <a class="btn btn-sm btn-outline-light" href="{{ url_for('admin.dashboards_edit', dash_id=d.id) }}">Editar</a>
+
+              <form method="POST" action="{{ url_for('admin.dashboards_delete', dash_id=d.id) }}"
+                    onsubmit="return confirm('Tem certeza que deseja excluir este dashboard?');">
+                <button class="btn btn-sm btn-outline-danger" type="submit">Excluir</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+
+          {% if dashboards|length == 0 %}
+          <tr>
+            <td colspan="5">
+              <div class="alert alert-info mb-0">Nenhum dashboard encontrado.</div>
+            </td>
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+
+
+================================================
+FILE: app/templates/admin/index.html
+================================================
+{% extends "base.html" %}
+
+{% block content %}
+<div class="bi-content admin-wrap">
+
+  <!-- HEADER -->
+  <div class="admin-head">
+    <div>
+      <h1 class="admin-h1">Administração</h1>
+      <p class="admin-p">Cadastre, edite e remova usuários e permissões.</p>
+    </div>
+
+    <form method="GET" action="{{ url_for('admin.index') }}" class="admin-search">
+      <input
+        type="text"
+        name="q"
+        value="{{ q }}"
+        placeholder="Buscar por nome, email ou setor..."
+        class="admin-input"
+      >
+      <button type="submit" class="admin-btn">Buscar</button>
+      {% if q %}
+        <a href="{{ url_for('admin.index') }}" class="admin-btn">Limpar</a>
+      {% endif %}
+    </form>
+  </div>
+
+  {% include "admin/_nav.html" %}
+
+  <!-- CADASTRAR USUÁRIO -->
+  <div class="admin-card">
+    <h3 class="admin-h3">Cadastrar usuário</h3>
+
+    <form method="POST" action="{{ url_for('admin.create_user') }}" class="admin-form">
+      <div class="admin-field">
+        <label class="admin-label">E-mail *</label>
+        <input name="email" type="email" required class="admin-input">
+      </div>
+
+      <div class="admin-field">
+        <label class="admin-label">Nome (opcional)</label>
+        <input name="name" type="text" class="admin-input">
+      </div>
+
+      <div class="admin-field">
+        <label class="admin-label">Setor (opcional)</label>
+        <input name="sector" type="text" class="admin-input">
+      </div>
+
+      <div class="admin-checks">
+        <label class="admin-check">
+          <input type="checkbox" name="active" checked> Ativo
+        </label>
+
+        <label class="admin-check">
+          <input type="checkbox" name="is_admin"> Admin
+        </label>
+      </div>
+
+      <button type="submit" class="admin-btn admin-btn-ok">Cadastrar</button>
+    </form>
+  </div>
+
+  <!-- LISTA -->
+  <div class="admin-table-box">
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th style="width:22%">Nome</th>
+          <th style="width:24%">Email</th>
+          <th style="width:20%">Setor</th>
+          <th class="t-center" style="width:8%">Salvar</th>
+          <th class="t-center" style="width:6%">Ativo</th>
+          <th class="t-center" style="width:6%">Admin</th>
+          <th class="t-right" style="width:14%">Ações</th>
+        </tr>
+      </thead>
+
+      <tbody>
+        {% for user in users %}
+        <tr>
+
+          <!-- FORM UPDATE -->
+          <form method="POST" action="{{ url_for('admin.update_user', user_id=user.id) }}" class="row-form">
+            <td>
+              <input name="name" value="{{ user.name }}" class="admin-input-sm">
+            </td>
+
+            <td>
+              <input name="email" value="{{ user.email }}" class="admin-input-sm">
+            </td>
+
+            <td>
+              <input name="sector" value="{{ user.sector or '' }}" class="admin-input-sm">
+            </td>
+
+            <td class="t-center">
+              <button type="submit" class="admin-btn admin-btn-sm">Salvar</button>
+            </td>
+          </form>
+
+          <!-- ATIVO TOGGLE -->
+          <td class="t-center">
+            <form method="POST" action="{{ url_for('admin.toggle_active', user_id=user.id) }}">
+              <button
+                type="submit"
+                class="pill {% if user.active %}pill-ok{% else %}pill-no{% endif %}"
+                {% if user.email.lower() == 'suporte@carmelhoteis.com.br' %}disabled{% endif %}
+              >
+                {% if user.active %}Sim{% else %}Não{% endif %}
+              </button>
+            </form>
+          </td>
+
+          <!-- ADMIN TOGGLE -->
+          <td class="t-center">
+            <form method="POST" action="{{ url_for('admin.toggle_admin', user_id=user.id) }}">
+              <button
+                type="submit"
+                class="pill {% if user.is_admin %}pill-ok{% else %}pill-neu{% endif %}"
+                {% if user.email.lower() == 'suporte@carmelhoteis.com.br' %}disabled{% endif %}
+              >
+                {% if user.is_admin %}Sim{% else %}Não{% endif %}
+              </button>
+            </form>
+          </td>
+
+          <!-- AÇÕES -->
+          <td class="t-right">
+            <div class="actions-col">
+              <a href="{{ url_for('admin.user_permissions', user_id=user.id) }}" class="admin-btn admin-btn-sm">
+                Permissões
+              </a>
+
+              <form
+                method="POST"
+                action="{{ url_for('admin.delete_user', user_id=user.id) }}"
+                onsubmit="return confirm('Excluir este usuário definitivamente?');"
+              >
+                <button type="submit" class="admin-btn admin-btn-sm admin-btn-danger">
+                  Excluir
+                </button>
+              </form>
+            </div>
+          </td>
+
+        </tr>
+        {% endfor %}
+
+        {% if users|length == 0 %}
+        <tr>
+          <td colspan="7" class="admin-empty">Nenhum usuário encontrado.</td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+
+</div>
+{% endblock %}
+
+
+
+================================================
+FILE: app/templates/admin/user_permissions.html
+================================================
+{% extends "base.html" %}
+{% block title %}Permissões - {{ user.name }}{% endblock %}
+
+{% block content %}
+<div class="bi-content admin-page">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+      <h2 class="mb-1">Permissões</h2>
+      <div class="info-text">{{ user.name }} — {{ user.email }}</div>
+    </div>
+    <a class="btn btn-outline-light btn-sm" href="{{ url_for('admin.index') }}">Voltar</a>
+  </div>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <form method="POST" class="card p-3">
+    {% for sector, items in sectors.items() %}
+      <div class="d-flex align-items-center justify-content-between mt-2 mb-2">
+        <h5 class="mb-0">{{ sector }}</h5>
+
+        <div class="d-flex gap-2">
+          <button
+            class="btn btn-sm btn-outline-light"
+            type="submit"
+            formaction="{{ url_for('admin.grant_sector', user_id=user.id) }}"
+            formmethod="POST"
+            name="sector"
+            value="{{ sector }}"
+          >
+            Liberar setor
+          </button>
+
+          <button
+            class="btn btn-sm btn-outline-danger"
+            type="submit"
+            formaction="{{ url_for('admin.revoke_sector', user_id=user.id) }}"
+            formmethod="POST"
+            name="sector"
+            value="{{ sector }}"
+          >
+            Remover setor
+          </button>
+        </div>
+      </div>
+
+      <div class="row g-2 mb-3">
+        {% for d in items %}
+        <div class="col-12 col-md-6 col-lg-4">
+          <label class="perm-item">
+            <input
+              type="checkbox"
+              name="dashboards"
+              value="{{ d.id }}"
+              {% if d.id in allowed_ids %}checked{% endif %}
+            >
+            <span class="perm-text">
+              <strong>{{ d.name }}</strong><br>
+              <small class="text-muted">{{ d.slug }}</small>
+            </span>
+          </label>
+        </div>
+        {% endfor %}
+      </div>
+      <hr>
+    {% endfor %}
+
+    <button class="btn btn-primary w-100" type="submit">
+      Salvar permissões
+    </button>
+  </form>
+</div>
+{% endblock %}
+
+

@@ -77,24 +77,6 @@ services:
     volumes:
       - n8n_data:/home/node/.n8n
 
-  tests:
-    build:
-      context: .
-      target: development
-    container_name: chat_reservas_tests
-    env_file: .env
-    environment:
-      - NODE_ENV=test
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-    volumes:
-      - ./src:/app/src
-      - ./tests:/app/tests
-      - ./.env:/app/.env
-    depends_on:
-      - postgres
-      - redis
-    command: npm test
-
 volumes:
   redis_data: #
   postgres_data:

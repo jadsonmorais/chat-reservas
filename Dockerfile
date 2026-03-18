@@ -1,35 +1,27 @@
-# ── Build stage ──────────────────────────────────────────
-FROM node:22-alpine AS builder
+# ── Build stage ──────────────────────────────────────────────
+FROM python:3.12-alpine AS builder
 
 WORKDIR /app
-COPY package.json ./
-# Use install since lockfile might be out of sync
-RUN npm install
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-# ── Development stage (for testing) ─────────────────────
-FROM node:22-alpine AS development
-
-WORKDIR /app
-COPY --from=builder /app/node_modules ./node_modules
-COPY . .
-
-# ── Production stage ─────────────────────────────────────
-FROM node:22-alpine AS production
+# ── Production stage ─────────────────────────────────────────
+FROM python:3.12-alpine AS production
 
 WORKDIR /app
 
-# Install only production dependencies
-COPY package.json ./
-RUN npm install --omit=dev
+COPY --from=builder /install /usr/local
 
-COPY src/ ./src/
+COPY app/ ./app/
 COPY public/ ./public/
+COPY config.py run.py ./
 
-# Non-root user for security
+# Non-root user (UID 1001 matches the original Node image)
 RUN addgroup -g 1001 appgroup && \
     adduser -u 1001 -G appgroup -s /bin/sh -D appuser
 USER appuser
 
 EXPOSE 3000
 
-CMD ["node", "src/index.js"]
+# --timeout 120: BEST_WINDOW fires 14 concurrent searches (can take 60-90s total)
+CMD ["gunicorn", "--bind", "0.0.0.0:3000", "--workers", "2", "--threads", "8", "--timeout", "120", "run:app"]
