@@ -1,94 +1,154 @@
-# 🏨 Chat Reservas — Plataforma de Inteligência Comercial
+# Chat Reservas — Inteligência Comercial de Voos
 
-Chat Reservas é uma plataforma de inteligência comercial para equipes de reservas de resorts de luxo no Ceará. Transforma o **WhatsApp** em um terminal de análise em tempo real: preços de voo, radar competitivo, janelas de captação e ranking de hubs — tudo via menu interativo, com o mínimo de input do usuário.
-
-O diferencial: o agente não apenas busca voos, ele **gera estratégias de venda** baseadas no custo de transporte do hóspede, com insights narrativos via **Claude AI (Anthropic)**.
+Módulo da plataforma de dados **Carmel Hotéis**. Transforma o WhatsApp em um terminal de análise de malha aérea em tempo real: preços de voo, radar competitivo, janelas de captação e ranking de hubs — com estratégias de venda geradas automaticamente para a equipe de reservas.
 
 ---
 
-## 🗂️ Três Camadas de Entrega
-
-| Fase | Status | Descrição |
-| :--- | :--- | :--- |
-| **1 — Chat WhatsApp** | ✅ Ativo | Agente conversacional com menu de 5 fluxos comerciais |
-| **2 — BI Metabase** | 🔧 Em desenvolvimento | Dashboards self-service conectados direto ao PostgreSQL |
-| **3 — Portal Intranet** | 📋 Planejado | Interface web unificada (Flask) integrando chat + BI |
-
----
-
-## ✨ Fluxos Disponíveis (menu interativo)
-
-Envie **menu**, **oi** ou **ajuda** para abrir o menu. Responda com o número:
-
-| # | Fluxo | O que faz |
-| :--- | :--- | :--- |
-| **1** | Mercado hoje | Busca voos de todos os 7 hubs → Fortaleza na próxima sexta |
-| **2** | Radar competitivo | Compara Fortaleza vs destinos de luxo concorrentes (Trancoso, Noronha, Búzios…) |
-| **3** | Melhor janela | Varre os próximos 14 dias e ranqueia os melhores dias para captação |
-| **4** | Ranking de hubs | Qual cidade tem o voo mais barato agora |
-| **5** | Busca específica | Origem, destino e data personalizados |
-
----
-
-## 🏗️ Stack Tecnológica
+## Posição na Plataforma Carmel
 
 ```
-Runtime:     Node.js 22 (Alpine, Docker)
-Framework:   Express.js
-Banco:       PostgreSQL 15
-Cache:       Redis (Alpine)
-WhatsApp:    Evolution API v2 (via Baileys)
-Voos:        SerpApi — Google Flights engine
-IA:          Anthropic SDK — Claude Haiku (insights narrativos)
-BI:          Metabase (porta 3001)
-Automação:   n8n (opcional)
+Plataforma Carmel (dados operacionais)
+│
+├── ETL Pipeline             ← Infraspeak, PDV, NF-e, Fiscal → PostgreSQL (schema carmel)
+├── Flask Intranet           ← Portal web, autenticação, relatórios
+└── chat-reservas  ◄ você está aqui
+    ├── Fase 1 — Chat WhatsApp    ✅ ativo
+    └── Fase 2 — Blueprint Flask  📋 planejado (importado pela intranet)
+```
+
+O chat-reservas usa seu **próprio banco PostgreSQL** (`chat_reservas`) com schema isolado. Na Fase 2, será empacotado como um Blueprint Flask e incorporado à intranet Carmel, com acesso direto ao banco `carmel` para cruzar dados de reservas com dados operacionais.
+
+---
+
+## Stack
+
+```
+Runtime:    Python 3.12 (Alpine, Docker)
+Framework:  Flask 3 + Gunicorn
+Banco:      PostgreSQL 15 (schema próprio: conversations, messages, flight_searches)
+Cache:      Redis (exclusivo para o Evolution API — sessões WhatsApp)
+WhatsApp:   Evolution API v2 (via Baileys)
+Voos:       SerpApi MCP server (google_flights engine)
+IA:         Google Gemini 2.0 Flash (insights narrativos — opcional)
+Automação:  n8n (opcional)
 ```
 
 ---
 
-## 🚀 Como Começar
+## Fluxos do Agente
 
-### Ambiente de desenvolvimento
+Envie **oi**, **menu** ou **ajuda** para abrir o menu. Responda com o número:
+
+| # | Fluxo | Descrição |
+|---|---|---|
+| 1 | Mercado hoje | Voos de todos os 7 hubs → Fortaleza na próxima sexta, ranqueados por preço |
+| 2 | Radar competitivo | Fortaleza vs 5 destinos de luxo concorrentes (Trancoso, Noronha, Búzios…) |
+| 3 | Melhor janela | Próximos 14 dias ranqueados — identifica os dias ideais de captação |
+| 4 | Ranking de hubs | Qual hub tem o voo mais barato agora para Fortaleza |
+| 5 | Busca específica | Origem, destino e data livres |
+
+---
+
+## Estratégias de Venda
+
+O agente classifica cada resultado e sugere uma abordagem comercial:
+
+| Nível | Condição | Estratégia |
+|---|---|---|
+| 🟢 ALTA | Voo barato (`< PRICE_THRESHOLD_LOW`) | Sugerir upgrade de suíte |
+| 🟡 MÉDIA | Preço intermediário | Gatilho de escassez |
+| 🔴 BAIXA | Voo caro (`> PRICE_THRESHOLD_MEDIUM`) | Oferecer crédito resort |
+
+Com `GEMINI_API_KEY` configurado, cada resposta ganha um parágrafo de análise narrativa gerado pelo Gemini 2.0 Flash.
+
+---
+
+## Banco de Dados
+
+Schema próprio no PostgreSQL. Tabelas:
+
+| Tabela | Descrição |
+|---|---|
+| `conversations` | Uma linha por número de WhatsApp |
+| `messages` | Histórico de mensagens (role: user / assistant) |
+| `flight_searches` | Resultado de cada busca com oportunidade de venda (JSONB) |
+
+---
+
+## Ambientes
+
+| Arquivo | Uso | Postgres |
+|---|---|---|
+| `docker-compose.yml` | Dev rápido | container interno porta 5432 |
+| `docker-compose.treino.yml` | Treino local | container interno porta 5433 |
+| `docker-compose.producao.yml` | Produção | host externo via `POSTGRES_HOST` |
+
+---
+
+## Subir o ambiente de treino
+
 ```bash
 cp .env.example .env
-# Preencha SERPAPI_KEY, EVOLUTION_API_*, ANTHROPIC_API_KEY
-docker compose up -d --build
-```
+# Preencher: SERPAPI_KEY, EVOLUTION_API_*, GEMINI_API_KEY (opcional)
 
-### Ambiente de treino (com Metabase)
-```bash
 docker compose -f docker-compose.treino.yml up -d --build
 ```
-Acesse: `http://localhost:3000` (chat) · `http://localhost:3001` (Metabase)
 
-### Ambiente de produção (PostgreSQL externo)
+Acesse: `http://localhost:3000`
+
+### Primeiro deploy em produção
+
 ```bash
-# 1. Rodar UMA VEZ antes do primeiro deploy:
+# Cria banco e schema no PostgreSQL externo (rodar UMA VEZ):
 bash scripts/init-prod-db.sh
 
-# 2. Subir os containers:
 docker compose -f docker-compose.producao.yml up -d --build
 ```
 
 ---
 
-## 💼 Estratégias de Venda Automáticas
+## Variáveis de Ambiente
 
-| Status | Cenário | Estratégia |
-| :--- | :--- | :--- |
-| 🟢 **ALTA** | Voo barato | Sugerir upgrade de suíte ("economizou no voo, invista no conforto") |
-| 🟡 **MÉDIA** | Preço padrão | Gatilho de escassez ("poucos quartos disponíveis neste período") |
-| 🔴 **BAIXA** | Voo caro | Oferecer crédito resort para amortizar o custo do aéreo |
+| Variável | Obrigatória | Descrição |
+|---|---|---|
+| `SERPAPI_KEY` | ✅ | Chave SerpApi (Google Flights) |
+| `EVOLUTION_API_URL` | ✅ | URL do Evolution API |
+| `EVOLUTION_API_KEY` | ✅ | Chave de autenticação |
+| `EVOLUTION_INSTANCE_NAME` | ✅ | Nome da instância WhatsApp |
+| `DATABASE_URL` | ✅ | Connection string PostgreSQL |
+| `POSTGRES_USER/PASSWORD/DB` | ✅ | Credenciais do banco |
+| `GEMINI_API_KEY` | — | Insights narrativos via Gemini (opcional) |
+| `PRICE_THRESHOLD_LOW` | — | Limiar de oportunidade alta (default: 300) |
+| `PRICE_THRESHOLD_MEDIUM` | — | Limiar de oportunidade média (default: 600) |
+| `USE_MCP` | — | `true` usa SerpApi MCP, `false` usa HTTP direto (default: true) |
+| `TZ` | — | Timezone (ex: `America/Sao_Paulo`) |
 
 ---
 
-## 🛠️ Variáveis de Ambiente
+## Estrutura
 
-| Variável | Uso |
-| :--- | :--- |
-| `SERPAPI_KEY` | Google Flights via SerpApi |
-| `EVOLUTION_API_URL/KEY/INSTANCE_NAME` | Conexão WhatsApp |
-| `ANTHROPIC_API_KEY` | Insights narrativos via Claude (opcional — degrada graciosamente) |
-| `POSTGRES_USER/PASSWORD/DB/HOST` | Banco de dados |
-| `PRICE_THRESHOLD_LOW` | Abaixo → upsell agressivo (ex: `500`) |
-| `PRICE_THRESHOLD_MEDIUM` | Acima → estratégia de retenção (ex: `1000`) |
+```
+app/
+├── __init__.py                    # create_app() factory (padrão intranet Carmel)
+├── agent/
+│   ├── agent.py                   # detect_intent() + 5 handlers comerciais
+│   └── webhook.py                 # Blueprint Flask: /webhook/evolution, /test/message, /health
+├── db/
+│   ├── pool.py                    # ThreadedConnectionPool (psycopg2)
+│   ├── init.py                    # Executa schema.sql na inicialização
+│   └── schema.sql                 # DDL: conversations, messages, flight_searches
+├── services/
+│   ├── serpapi_mcp.py             # Cliente MCP (https://mcp.serpapi.com)
+│   ├── serpapi_http.py            # Fallback HTTP direto (USE_MCP=false)
+│   ├── evolution_api.py           # send_message() + formatação WhatsApp
+│   └── gemini_service.py          # Insights narrativos via Gemini 2.0 Flash
+└── skills/
+    ├── search_flights.py           # Busca com retry (2x backoff)
+    ├── search_competitors.py       # ThreadPoolExecutor: FOR + 5 concorrentes
+    ├── analyze_sales_opportunity.py
+    ├── persist_transaction.py      # ACID via psycopg2
+    ├── get_conversation_history.py
+    └── get_recent_searches.py
+config.py                          # Config class (padrão intranet Carmel)
+run.py                             # Entry point
+```
